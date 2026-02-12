@@ -103,20 +103,32 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
   return null;
 }
 
+/** 표를 "행 단위"로 보기 좋게 출력 (UI가 마크다운/고정폭을 몰라도 구조 유지) */
+function formatRowsAsRecords(headers: string[], rows: string[][]): string {
+  const head = `구분: ${headers.join(" / ")}`;
+  const body = rows.map((row, idx) => {
+    const pairs = headers.map((h, i) => `${h}: ${(row[i] ?? "").trim()}`).join(" / ");
+    return `- ${idx + 1}) ${pairs}`;
+  });
+  return [head, ...body].join("\n");
+}
+
 /**
  * ✅ DOCX 표가 "셀 텍스트가 줄바꿈으로 풀린 형태"로 저장된 경우:
- * - 헤더 시퀀스를 찾고 N열씩 묶어서 Markdown 표로 복원
- * - 표 뒤에 딸려오는 다른 섹션(예: "기타")은 잘라내는 쪽으로 처리
+ * - 헤더 시퀀스를 찾고 N열씩 묶어서 "행 단위 레코드"로 복원
+ * - 표 위 설명/표 아래 설명(유의/참고/절차)까지 같이 포함
+ *
+ * 반환: (표 위) + ([표] + 행단위 출력) + (표 아래)
  */
 function rebuildFlatTableWithContext(text: string): string | null {
-  const rawLines = text
+  const rawLines = (text ?? "")
     .split("\n")
     .map((l) => l.replace(/\r/g, "").trim())
     .filter((l) => l.length > 0);
 
   if (rawLines.length < 10) return null;
 
-  const headerCandidates = [
+  const headerCandidates: string[][] = [
     ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
     ["구분", "내용"],
     ["항목", "지원대상", "신청 기준일"],
@@ -130,17 +142,28 @@ function rebuildFlatTableWithContext(text: string): string | null {
     for (let i = 0; i <= rawLines.length - headers.length; i++) {
       let ok = true;
       for (let j = 0; j < headers.length; j++) {
-        if (rawLines[i + j] !== headers[j]) { ok = false; break; }
+        if (rawLines[i + j] !== headers[j]) {
+          ok = false;
+          break;
+        }
       }
       if (ok) return i;
     }
     return -1;
   }
 
-  // 표 다음에 붙는 “다른 섹션 시작”을 만나면 표 rows 계산을 끊기 위한 stop 신호
-  // (단, 표 아래 설명은 살려야 하니까 "표 데이터 계산"만 끊고, 나머지는 아래에 그대로 붙임)
+  // 표 "데이터 영역" 계산은 멈추되, 이후 텍스트는 tail로 살려둠
   const sectionStarts = new Set([
-    "기타", "참고사항", "유의사항", "신청방법", "지급일", "지급시점", "사용 절차", "사용절차",
+    "기타",
+    "참고사항",
+    "유의사항",
+    "신청방법",
+    "신청 방법",
+    "지급일",
+    "지급시점",
+    "사용 절차",
+    "사용절차",
+    "절차",
   ]);
 
   for (const headers of headerCandidates) {
@@ -149,40 +172,48 @@ function rebuildFlatTableWithContext(text: string): string | null {
 
     const cols = headers.length;
 
-    // ✅ 표 위쪽(제목/설명) 보존
     const before = rawLines.slice(0, hIdx).join("\n").trim();
-
     const after = rawLines.slice(hIdx + headers.length);
 
-    // 표 데이터는 “연속 cols 묶음”으로만 계산
-    // 그런데 표 아래에 유의/기타 등이 붙으면, 그 지점부터는 row 계산을 멈춰야 함
     let cutForRowCalc = after.length;
     for (let i = 0; i < after.length; i++) {
-      if (sectionStarts.has(after[i])) { cutForRowCalc = i; break; }
+      if (sectionStarts.has(after[i])) {
+        cutForRowCalc = i;
+        break;
+      }
     }
 
     const tableArea = after.slice(0, cutForRowCalc);
-    const tail = after.slice(cutForRowCalc).join("\n").trim(); // ✅ 표 아래 설명 보존
+    const tail = after.slice(cutForRowCalc).join("\n").trim();
 
-    const rowCount = Math.floor(tableArea.length / cols);
-    if (rowCount <= 0) continue;
-
+    // ✅ 핵심: “표 끝”을 더 똑똑하게 감지
+    //  - rows를 만들다가, 다음에 들어올 값이 '섹션 제목' 같으면 중단
+    //  - cols 단위로 묶되, 너무 이상한 데이터(빈칸 과다)면 중단
     const rows: string[][] = [];
-    for (let r = 0; r < rowCount; r++) {
-      rows.push(tableArea.slice(r * cols, r * cols + cols));
+    for (let i = 0; i + cols <= tableArea.length; i += cols) {
+      const row = tableArea.slice(i, i + cols);
+
+      // 빈값이 너무 많으면(> 절반) 표 종료로 판단
+      const emptyCount = row.filter((v) => !String(v ?? "").trim()).length;
+      if (emptyCount >= Math.ceil(cols / 2)) break;
+
+      // "다음 행의 첫 셀"이 섹션 시작어면 종료
+      const nextFirst = tableArea[i + cols] ?? "";
+      if (sectionStarts.has(String(nextFirst))) {
+        rows.push(row);
+        break;
+      }
+
+      rows.push(row);
     }
 
-    const md: string[] = [];
-    md.push(`| ${headers.join(" | ")} |`);
-    md.push(`| ${headers.map(() => "---").join(" | ")} |`);
-    for (const row of rows) {
-      md.push(`| ${row.map((c) => c.replace(/\|/g, "｜")).join(" | ")} |`);
-    }
+    if (rows.length === 0) continue;
 
-    // ✅ 결과: (표 위) + (표) + (표 아래)
-    const outParts = [];
+    const tableText = ["[표]", formatRowsAsRecords(headers, rows)].join("\n");
+
+    const outParts: string[] = [];
     if (before) outParts.push(before);
-    outParts.push(md.join("\n"));
+    outParts.push(tableText);
     if (tail) outParts.push(tail);
 
     return outParts.join("\n\n").trim();
@@ -191,106 +222,53 @@ function rebuildFlatTableWithContext(text: string): string | null {
   return null;
 }
 
-/** ✅ Markdown 표를 "항상 보이는" 고정폭 텍스트 표로 변환 */
-function mdTableToPlain(md: string): string {
-  const lines = md.split("\n").map((l) => l.trim());
-  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
-  if (tableLines.length < 3) return md;
-
-  const rows = tableLines.map((l) =>
-    l
-      .slice(1, -1)
-      .split("|")
-      .map((c) => c.trim())
-  );
-
-  const header = rows[0];
-  const body = rows.slice(2);
-
-  const colCount = header.length;
-  const widths = new Array(colCount).fill(0);
-
-  const all = [header, ...body];
-  for (const r of all) {
-    for (let i = 0; i < colCount; i++) {
-      const v = (r[i] ?? "").toString();
-      widths[i] = Math.max(widths[i], v.length);
-    }
-  }
-
-  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
-  const joinRow = (r: string[]) =>
-    "│ " + r.map((c, i) => pad((c ?? "").toString(), widths[i])).join(" │ ") + " │";
-
-  const top = "┌ " + widths.map((w) => "─".repeat(w)).join(" ┬ ") + " ┐";
-  const mid = "├ " + widths.map((w) => "─".repeat(w)).join(" ┼ ") + " ┤";
-  const bot = "└ " + widths.map((w) => "─".repeat(w)).join(" ┴ ") + " ┘";
-
-  const out: string[] = [];
-  out.push(top);
-  out.push(joinRow(header));
-  out.push(mid);
-  for (const r of body) out.push(joinRow(r));
-  out.push(bot);
-  return out.join("\n");
-}
-
-/** 문서 내 마크다운 표 블록을 전부 plain table로 치환 */
-function makeTablesAlwaysReadable(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let buf: string[] = [];
-  let inTable = false;
-
-  const flush = () => {
-    if (buf.length) {
-      const md = buf.join("\n");
-      out.push(mdTableToPlain(md));
-      buf = [];
-    }
-  };
-
-  for (const l of lines) {
-    const t = l.trim();
-    const isTableLine = t.startsWith("|") && t.endsWith("|");
-    if (isTableLine) {
-      inTable = true;
-      buf.push(t);
-    } else {
-      if (inTable) {
-        flush();
-        inTable = false;
-      }
-      out.push(l);
-    }
-  }
-  if (inTable) flush();
-
-  return out.join("\n").trim();
-}
-
 /** 최종 chunk 포맷 */
 function formatChunkContent(content: string): string {
   const rebuilt = rebuildFlatTableWithContext(content);
-  const text = (rebuilt ?? content).trim();
-  return makeTablesAlwaysReadable(text);
+  if (rebuilt) return rebuilt.trim();
+  return (content ?? "").toString().trim();
+}
+
+/**
+ * ✅ 답변은 "베스트 chunk 기준 앞/뒤 1개"만 붙임
+ * - 이유: 지금처럼 문서가 길면 다른 섹션이 섞여서 망가짐
+ * - 표/절차는 보통 인접 chunk에 이어져 있는 경우가 많아서 이게 제일 안정적
+ */
+function pickContiguousHits(best: Hit, pool: Hit[]): Hit[] {
+  const sameDoc = pool
+    .filter((h) => h.document_id === best.document_id)
+    .sort((a, b) => a.chunk_index - b.chunk_index);
+
+  const idx = sameDoc.findIndex((h) => h.chunk_index === best.chunk_index);
+  if (idx < 0) return [best];
+
+  const picked: Hit[] = [];
+  if (sameDoc[idx - 1]) picked.push(sameDoc[idx - 1]);
+  picked.push(sameDoc[idx]);
+  if (sameDoc[idx + 1]) picked.push(sameDoc[idx + 1]);
+
+  // 중복 제거
+  const seen = new Set<string>();
+  return picked.filter((h) => {
+    const key = `${h.document_id}:${h.chunk_index}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function toAnswer(hits: Hit[], intent: "A" | "B" | "C") {
-  // 길고 구조적인 것을 우선
-  const sorted = [...hits].sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0));
-
   const body =
     `분류: 의도 ${intent}\n\n` +
-    sorted
+    hits
       .map((h) => {
         const formatted = formatChunkContent((h.content ?? "").toString());
-        return `[${h.filename} / 조각 ${h.chunk_index}]\n${formatted}`;
+        return `📌 ${h.filename}\n${formatted}\n\n출처: ${h.filename} / 조각 ${h.chunk_index}`;
       })
       .join("\n\n────────────────────────\n\n");
 
-  const citations = sorted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
-  return { text: body, citations };
+  const citations = hits.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
+  return { text: body.trim(), citations };
 }
 
 export async function POST(req: Request) {
@@ -314,7 +292,7 @@ export async function POST(req: Request) {
       q: question,
       tokens,
       file_hint: fileHint,
-      match_count: 10,
+      match_count: 12,
       min_sim: 0.12,
     });
     if (error) throw new Error(error.message);
@@ -325,7 +303,7 @@ export async function POST(req: Request) {
         q: question,
         tokens,
         file_hint: null,
-        match_count: 10,
+        match_count: 12,
         min_sim: 0.12,
       });
       hits = retry.data ?? [];
@@ -368,25 +346,17 @@ export async function POST(req: Request) {
 
     const pool = (lockedHits && lockedHits.length ? lockedHits : hits) as any[];
 
-    // ✅ 질문 토큰 포함률 기반으로 chunk를 재정렬/필터하여 "기타" 등 엉뚱한 섹션 섞임을 줄임
-    const must = extractTokens(question);
-    function tokenHitRate(t: string) {
-      const lower = (t ?? "").toLowerCase();
-      const hit = must.filter((k) => lower.includes(k.toLowerCase())).length;
-      return hit / Math.max(1, must.length);
-    }
+    // 4) 베스트 chunk 1개 고르고, 그 주변(앞/뒤 1개)만 출력
+    const sortedBySim = [...pool].sort((a: any, b: any) => (b.sim ?? 0) - (a.sim ?? 0));
+    const best: Hit = {
+      document_id: sortedBySim[0].document_id,
+      filename: sortedBySim[0].filename,
+      chunk_index: sortedBySim[0].chunk_index,
+      content: sortedBySim[0].content,
+      sim: sortedBySim[0].sim,
+    };
 
-    const scored = pool
-      .map((h) => ({ ...h, rate: tokenHitRate(h.content ?? "") }))
-      .sort((a, b) => (b.rate - a.rate) || ((b.content?.length ?? 0) - (a.content?.length ?? 0)));
-
-    const finalHits: Hit[] = scored.slice(0, 4).map((h) => ({
-      document_id: h.document_id,
-      filename: h.filename,
-      chunk_index: h.chunk_index,
-      content: h.content,
-      sim: h.sim,
-    }));
+    const finalHits = pickContiguousHits(best, pool as Hit[]);
 
     const { text, citations } = toAnswer(finalHits, intent);
     return NextResponse.json({ answer: text, citations });
