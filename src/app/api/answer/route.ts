@@ -280,11 +280,14 @@ function wrapAnyMarkdownTableAsCodeblock(text: string): string {
 
 /** build mark, 중복 분류, 조각 헤더 등 출력용 정리 */
 function cleanText(t: string) {
-  return t
+  return (t ?? "")
+    .toString()
     .replace(/\[BUILD_MARK_[^\]]+\]/g, "")
-    // ✅ 분류 라인이든, 한 줄에 여러 번이든 싹 제거
-    .replace(/(^|\n)\s*분류\s*:\s*의도\s*[ABC]\s*(?=\n|$)/g, "\n")
-    .replace(/분류\s*:\s*의도\s*[ABC]\s*/g, "") // ✅ 라인 중간에 끼어든 것도 제거(보험)
+
+    // ✅ "분류: 의도 X"가 줄이든, 한 줄에 여러 번이든, 앞뒤 공백/기호가 있든 싹 제거
+    .replace(/(^|\n)\s*[-•]*\s*분류\s*:\s*의도\s*[ABC]\s*(?=\n|$)/g, "\n")
+    .replace(/분류\s*:\s*의도\s*[ABC]\s*/g, "") // ✅ 줄 중간에 끼어든 것도 제거(보험)
+
     .replace(/^\[[^\]]+\/\s*조각\s*\d+\]$/gm, "")
     .replace(/^📌.*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
@@ -327,7 +330,7 @@ function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
 
   // ✅ (추가) 본문에 섞여 들어온 "분류: 의도 X" 라인은 전부 제거
   // (맨 위 타이틀은 아래에서 다시 넣으니 문제 없음)
-  body = body.replace(/^분류:\s*의도\s*[ABC]\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  
 
   const citations = formatted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
   const sourceLines = citations.map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`).join("\n");
