@@ -105,10 +105,10 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
 
 /**
  * ✅ DOCX 표가 "셀 텍스트가 줄바꿈으로 풀린 형태"로 저장된 경우:
- *  - 헤더 시퀀스를 찾고
- *  - N열씩 묶어서 Markdown 표로 복원
+ * - 헤더 시퀀스를 찾고 N열씩 묶어서 Markdown 표로 복원
+ * - 표 뒤에 딸려오는 다른 섹션(예: "기타")은 잘라내는 쪽으로 처리
  */
-function rebuildFlatTableToMarkdown(text: string): string | null {
+function rebuildFlatTableToMarkdownOnly(text: string): string | null {
   const rawLines = text
     .split("\n")
     .map((l) => l.trim())
@@ -140,20 +140,44 @@ function rebuildFlatTableToMarkdown(text: string): string | null {
     return -1;
   }
 
+  const stopWords = new Set([
+    "기타",
+    "병역의무",
+    "민방위",
+    "예비군",
+    "훈련",
+    "증명서",
+    "참고사항",
+    "유의사항",
+    "신청방법",
+    "지급일",
+    "지급시점",
+  ]);
+
   for (const headers of headerCandidates) {
     const hIdx = findHeaderIndex(headers);
     if (hIdx === -1) continue;
 
-    const after = rawLines.slice(hIdx + headers.length);
     const cols = headers.length;
-    if (after.length < cols) continue;
+    const after = rawLines.slice(hIdx + headers.length);
 
-    const rowCount = Math.floor(after.length / cols);
+    // 표 데이터가 시작된 이후, "기타/민방위/예비군..." 같은 섹션 시작 단어가 나오면 거기서 끊기
+    let cut = after.length;
+    for (let i = 0; i < after.length; i++) {
+      const v = after[i];
+      if (stopWords.has(v)) {
+        cut = i;
+        break;
+      }
+    }
+    const afterCut = after.slice(0, cut);
+
+    const rowCount = Math.floor(afterCut.length / cols);
     if (rowCount <= 0) continue;
 
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) {
-      rows.push(after.slice(r * cols, r * cols + cols));
+      rows.push(afterCut.slice(r * cols, r * cols + cols));
     }
 
     const md: string[] = [];
@@ -163,117 +187,72 @@ function rebuildFlatTableToMarkdown(text: string): string | null {
       md.push(`| ${row.map((c) => c.replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    const beforePart = rawLines.slice(0, hIdx).join("\n");
-    const used = rowCount * cols;
-    const tail = after.slice(used).join("\n");
-
-    const out = [beforePart || null, md.join("\n"), tail || null].filter(Boolean).join("\n\n");
-    return out;
+    // ✅ 표만 반환 (앞/뒤 문장 섞지 않음)
+    return md.join("\n");
   }
 
   return null;
 }
 
-/** ✅ Markdown 표를 "항상 보이는" 고정폭 텍스트 표로 변환 */
-function mdTableToPlain(md: string): string {
-  const lines = md.split("\n").map((l) => l.trim());
-  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
-  if (tableLines.length < 3) return md;
+/** 본문을 "섹션 단위"로 잘라서 질문과 가장 관련 높은 섹션만 남기기 */
+function pickBestSectionByTokens(content: string, mustTokens: string[]): string {
+  const blocks = content
+    .split(/\n\s*\n/g)
+    .map((b) => b.trim())
+    .filter(Boolean);
 
-  const rows = tableLines.map((l) =>
-    l
-      .slice(1, -1)
-      .split("|")
-      .map((c) => c.trim())
-  );
+  if (blocks.length <= 1) return content.trim();
 
-  const header = rows[0];
-  const body = rows.slice(2);
-
-  const colCount = header.length;
-  const widths = new Array(colCount).fill(0);
-
-  const all = [header, ...body];
-  for (const r of all) {
-    for (let i = 0; i < colCount; i++) {
-      const v = (r[i] ?? "").toString();
-      widths[i] = Math.max(widths[i], v.length);
-    }
-  }
-
-  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
-  const joinRow = (r: string[]) =>
-    "│ " + r.map((c, i) => pad((c ?? "").toString(), widths[i])).join(" │ ") + " │";
-
-  const top = "┌ " + widths.map((w) => "─".repeat(w)).join(" ┬ ") + " ┐";
-  const mid = "├ " + widths.map((w) => "─".repeat(w)).join(" ┼ ") + " ┤";
-  const bot = "└ " + widths.map((w) => "─".repeat(w)).join(" ┴ ") + " ┘";
-
-  const out: string[] = [];
-  out.push(top);
-  out.push(joinRow(header));
-  out.push(mid);
-  for (const r of body) out.push(joinRow(r));
-  out.push(bot);
-  return out.join("\n");
-}
-
-/** 문서 내 마크다운 표 블록을 전부 plain table로 치환 */
-function makeTablesAlwaysReadable(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let buf: string[] = [];
-  let inTable = false;
-
-  const flush = () => {
-    if (buf.length) {
-      const md = buf.join("\n");
-      out.push(mdTableToPlain(md));
-      buf = [];
-    }
+  const score = (txt: string) => {
+    const lower = txt.toLowerCase();
+    const hit = mustTokens.filter((k) => lower.includes(k.toLowerCase())).length;
+    // 표/헤더가 있는 블록이면 가점
+    const hasTable =
+      (txt.includes("|") && txt.includes("---")) ||
+      txt.includes("구분") ||
+      txt.includes("경조유형") ||
+      txt.includes("휴가일수");
+    return hit + (hasTable ? 2 : 0) + Math.min(1, txt.length / 2000);
   };
 
-  for (const l of lines) {
-    const t = l.trim();
-    const isTableLine = t.startsWith("|") && t.endsWith("|");
-    if (isTableLine) {
-      inTable = true;
-      buf.push(t);
-    } else {
-      if (inTable) {
-        flush();
-        inTable = false;
-      }
-      out.push(l);
-    }
-  }
-  if (inTable) flush();
+  const ranked = blocks
+    .map((b) => ({ b, s: score(b) }))
+    .sort((a, b) => b.s - a.s);
 
-  return out.join("\n").trim();
+  // 가장 관련 높은 1~2개만 (너무 길게 붙지 않게)
+  const top = ranked.slice(0, 2).map((x) => x.b);
+
+  return top.join("\n\n").trim();
 }
 
-/** 최종 chunk 포맷 */
-function formatChunkContent(content: string): string {
-  const rebuilt = rebuildFlatTableToMarkdown(content);
-  const text = (rebuilt ?? content).trim();
-  return makeTablesAlwaysReadable(text);
+/** 최종 chunk 포맷: (1) 표 복원 가능하면 표만 출력, (2) 아니면 섹션에서 가장 관련 높은 부분만 */
+function formatChunkContent(content: string, mustTokens: string[]): string {
+  // 1) "한 줄씩 풀린 표"를 Markdown 표로 복원 (표만 반환)
+  const rebuiltTableOnly = rebuildFlatTableToMarkdownOnly(content);
+  if (rebuiltTableOnly) return rebuiltTableOnly.trim();
+
+  // 2) 이미 Markdown 표가 들어있는 경우: 표가 있는 블록만 선택되도록 섹션 선택
+  const best = pickBestSectionByTokens(content, mustTokens);
+
+  // 3) 마지막: 그냥 원문
+  return best.trim();
 }
 
-function toAnswer(hits: Hit[], intent: "A" | "B" | "C") {
-  // 길고 구조적인 것을 우선
+function toAnswer(hits: Hit[], intent: "A" | "B" | "C", mustTokens: string[]) {
+  // 길고 구조적인 것을 우선 (표/섹션 우선)
   const sorted = [...hits].sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0));
 
   const body =
     `분류: 의도 ${intent}\n\n` +
     sorted
       .map((h) => {
-        const formatted = formatChunkContent((h.content ?? "").toString());
-        return `[${h.filename} / 조각 ${h.chunk_index}]\n${formatted}`;
+        const formatted = formatChunkContent((h.content ?? "").toString(), mustTokens);
+        return `📌 ${h.filename}\n${formatted}\n\n출처: ${h.filename} / 조각 ${h.chunk_index}`;
       })
       .join("\n\n────────────────────────\n\n");
 
   const citations = sorted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
-  return { text: body, citations };
+  return { text: body.trim(), citations };
 }
 
 export async function POST(req: Request) {
@@ -351,7 +330,7 @@ export async function POST(req: Request) {
 
     const pool = (lockedHits && lockedHits.length ? lockedHits : hits) as any[];
 
-    // ✅ 질문 토큰 포함률 기반으로 chunk를 재정렬/필터하여 "기타" 등 엉뚱한 섹션 섞임을 줄임
+    // 4) 질문 토큰 포함률로 재정렬 (엉뚱한 섹션 섞임 최소화)
     const must = extractTokens(question);
     function tokenHitRate(t: string) {
       const lower = (t ?? "").toLowerCase();
@@ -363,7 +342,7 @@ export async function POST(req: Request) {
       .map((h) => ({ ...h, rate: tokenHitRate(h.content ?? "") }))
       .sort((a, b) => (b.rate - a.rate) || ((b.content?.length ?? 0) - (a.content?.length ?? 0)));
 
-    const finalHits: Hit[] = scored.slice(0, 4).map((h) => ({
+    const finalHits: Hit[] = scored.slice(0, 3).map((h) => ({
       document_id: h.document_id,
       filename: h.filename,
       chunk_index: h.chunk_index,
@@ -371,7 +350,7 @@ export async function POST(req: Request) {
       sim: h.sim,
     }));
 
-    const { text, citations } = toAnswer(finalHits, intent);
+    const { text, citations } = toAnswer(finalHits, intent, must);
     return NextResponse.json({ answer: text, citations });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
