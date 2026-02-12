@@ -282,8 +282,9 @@ function wrapAnyMarkdownTableAsCodeblock(text: string): string {
 function cleanText(t: string) {
   return t
     .replace(/\[BUILD_MARK_[^\]]+\]/g, "")
-    .replace(/^분류:\s*의도\s*[ABC]\s*$/gm, "")
-    .replace(/^(분류:\s*의도\s*[ABC]\s*)+/gm, "")
+    // ✅ 분류 라인이든, 한 줄에 여러 번이든 싹 제거
+    .replace(/(^|\n)\s*분류\s*:\s*의도\s*[ABC]\s*(?=\n|$)/g, "\n")
+    .replace(/분류\s*:\s*의도\s*[ABC]\s*/g, "") // ✅ 라인 중간에 끼어든 것도 제거(보험)
     .replace(/^\[[^\]]+\/\s*조각\s*\d+\]$/gm, "")
     .replace(/^📌.*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
