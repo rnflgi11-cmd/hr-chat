@@ -228,7 +228,54 @@ function formatChunkContent(content: string): string {
   if (rebuilt) return rebuilt.trim();
   return (content ?? "").toString().trim();
 }
+function makeTablesAlwaysReadable(text: string): string {
+  // Convert markdown-style tables to readable format
+  // This is a simple pass-through as tables are already handled by rebuildFlatTableWithContext
+  return text;
+}
 
+function stripNoiseLines(text: string): string {
+  const lines = (text ?? "")
+    .toString()
+    .split("\n")
+    .map((l) => l.replace(/\r/g, "").trimEnd());
+
+  const cleaned: string[] = [];
+
+  for (const line of lines) {
+    const t = line.trim();
+
+    // 1) 빌드 마크 제거
+    if (t.startsWith("[BUILD_MARK_")) continue;
+
+    // 2) 분류 반복 제거
+    if (/^분류:\s*의도\s*[ABC]\s*$/u.test(t)) continue;
+
+    // 3) 내부 조각 헤더 제거: [파일명 / 조각 n]
+    if (/^\[[^\]]+\/\s*조각\s*\d+\]$/u.test(t)) continue;
+
+    // 4) 파일명 라인 제거 (📌 포함 가능)
+    //    예: "📌 13_휴가규정(연차,경조,공가).docx"
+    if (/[0-9]+_.+\.(docx|pptx|pdf|xlsx)$/iu.test(t)) continue;
+    if (/^📌\s*.+\.(docx|pptx|pdf|xlsx)$/iu.test(t)) continue;
+
+    cleaned.push(line);
+  }
+
+  // 앞/뒤 공백 줄 정리
+  return cleaned
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatAnswerForUser(raw: string): string {
+  // 표 재구성 → 표 가독화(plain) → 노이즈 제거
+  const rebuilt = rebuildFlatTableWithContext(raw);
+  const base = rebuilt ? rebuilt : raw;
+  const readable = makeTablesAlwaysReadable(base);
+  return stripNoiseLines(readable);
+}
 /**
  * ✅ 답변은 "베스트 chunk 기준 앞/뒤 1개"만 붙임
  * - 이유: 지금처럼 문서가 길면 다른 섹션이 섞여서 망가짐
@@ -258,16 +305,24 @@ function pickContiguousHits(best: Hit, pool: Hit[]): Hit[] {
 }
 
 function toAnswer(hits: Hit[], intent: "A" | "B" | "C") {
-  const body =
-    `분류: 의도 ${intent}\n\n` +
-    hits
-      .map((h) => {
-        const formatted = formatChunkContent((h.content ?? "").toString());
-        return `📌 ${h.filename}\n${formatted}\n\n출처: ${h.filename} / 조각 ${h.chunk_index}`;
-      })
-      .join("\n\n────────────────────────\n\n");
+  // 길고 구조적인 것을 우선
+  const sorted = [...hits].sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0));
 
-  const citations = hits.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
+  // ✅ 본문: 파일/조각 헤더 없이 “원문 내용”만 이어붙이기
+  const parts = sorted
+    .map((h) => formatAnswerForUser((h.content ?? "").toString()))
+    .filter((t) => t.length > 0);
+
+  let body = `분류: 의도 ${intent}\n\n` + parts.join("\n\n────────────────────────\n\n");
+
+  // ✅ 출처는 맨 아래에만
+  const citations = sorted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
+  if (citations.length > 0) {
+    body +=
+      "\n\n[출처]\n" +
+      citations.map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`).join("\n");
+  }
+
   return { text: body.trim(), citations };
 }
 
@@ -358,14 +413,12 @@ export async function POST(req: Request) {
 
     const finalHits = pickContiguousHits(best, pool as Hit[]);
 
-    const { text, citations } = toAnswer(finalHits, intent);
+    const { text: answer, citations } = toAnswer(finalHits, intent);
 
-const markedText = "[BUILD_MARK_2026_02_12]\n\n" + text;
-
-return NextResponse.json({
-  answer: markedText,
-  citations,
-});
+    return NextResponse.json({
+      answer,
+      citations,
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }
