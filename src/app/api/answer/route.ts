@@ -314,20 +314,20 @@ function filenameBoost(fileHint: string | null, filename: string) {
 }
 
 function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
-  // ✅ 표가 있는 chunk가 있으면 "표 포함 chunk 우선"
   const formatted = finalHits.map((h) => {
     const f = formatChunkContent(h.content ?? "");
     return { ...h, formatted: f.text, hasTable: f.hasTable };
   });
 
-  // 표 있는 경우: 표 chunk를 맨 앞으로
   formatted.sort((a, b) => Number(b.hasTable) - Number(a.hasTable));
 
-  // ✅ 본문은 "원문 유지"를 위해 chunk를 그대로 붙이되, [파일/조각] 헤더는 제거
   let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
   body = cleanText(body);
 
-  // ✅ 출처는 맨 아래에만
+  // ✅ (추가) 본문에 섞여 들어온 "분류: 의도 X" 라인은 전부 제거
+  // (맨 위 타이틀은 아래에서 다시 넣으니 문제 없음)
+  body = body.replace(/^분류:\s*의도\s*[ABC]\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+
   const citations = formatted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
   const sourceLines = citations.map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`).join("\n");
 
