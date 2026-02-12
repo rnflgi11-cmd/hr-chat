@@ -359,7 +359,13 @@ export async function POST(req: Request) {
     const finalHits = pickContiguousHits(best, pool as Hit[]);
 
     const { text, citations } = toAnswer(finalHits, intent);
-    return NextResponse.json({ answer: text, citations });
+
+const markedText = "[BUILD_MARK_2026_02_12]\n\n" + text;
+
+return NextResponse.json({
+  answer: markedText,
+  citations,
+});
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }
