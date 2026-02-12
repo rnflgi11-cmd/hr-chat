@@ -108,10 +108,10 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
  * - 헤더 시퀀스를 찾고 N열씩 묶어서 Markdown 표로 복원
  * - 표 뒤에 딸려오는 다른 섹션(예: "기타")은 잘라내는 쪽으로 처리
  */
-function rebuildFlatTableToMarkdownOnly(text: string): string | null {
+function rebuildFlatTableWithContext(text: string): string | null {
   const rawLines = text
     .split("\n")
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\r/g, "").trim())
     .filter((l) => l.length > 0);
 
   if (rawLines.length < 10) return null;
@@ -130,28 +130,17 @@ function rebuildFlatTableToMarkdownOnly(text: string): string | null {
     for (let i = 0; i <= rawLines.length - headers.length; i++) {
       let ok = true;
       for (let j = 0; j < headers.length; j++) {
-        if (rawLines[i + j] !== headers[j]) {
-          ok = false;
-          break;
-        }
+        if (rawLines[i + j] !== headers[j]) { ok = false; break; }
       }
       if (ok) return i;
     }
     return -1;
   }
 
-  const stopWords = new Set([
-    "기타",
-    "병역의무",
-    "민방위",
-    "예비군",
-    "훈련",
-    "증명서",
-    "참고사항",
-    "유의사항",
-    "신청방법",
-    "지급일",
-    "지급시점",
+  // 표 다음에 붙는 “다른 섹션 시작”을 만나면 표 rows 계산을 끊기 위한 stop 신호
+  // (단, 표 아래 설명은 살려야 하니까 "표 데이터 계산"만 끊고, 나머지는 아래에 그대로 붙임)
+  const sectionStarts = new Set([
+    "기타", "참고사항", "유의사항", "신청방법", "지급일", "지급시점", "사용 절차", "사용절차",
   ]);
 
   for (const headers of headerCandidates) {
@@ -159,25 +148,28 @@ function rebuildFlatTableToMarkdownOnly(text: string): string | null {
     if (hIdx === -1) continue;
 
     const cols = headers.length;
+
+    // ✅ 표 위쪽(제목/설명) 보존
+    const before = rawLines.slice(0, hIdx).join("\n").trim();
+
     const after = rawLines.slice(hIdx + headers.length);
 
-    // 표 데이터가 시작된 이후, "기타/민방위/예비군..." 같은 섹션 시작 단어가 나오면 거기서 끊기
-    let cut = after.length;
+    // 표 데이터는 “연속 cols 묶음”으로만 계산
+    // 그런데 표 아래에 유의/기타 등이 붙으면, 그 지점부터는 row 계산을 멈춰야 함
+    let cutForRowCalc = after.length;
     for (let i = 0; i < after.length; i++) {
-      const v = after[i];
-      if (stopWords.has(v)) {
-        cut = i;
-        break;
-      }
+      if (sectionStarts.has(after[i])) { cutForRowCalc = i; break; }
     }
-    const afterCut = after.slice(0, cut);
 
-    const rowCount = Math.floor(afterCut.length / cols);
+    const tableArea = after.slice(0, cutForRowCalc);
+    const tail = after.slice(cutForRowCalc).join("\n").trim(); // ✅ 표 아래 설명 보존
+
+    const rowCount = Math.floor(tableArea.length / cols);
     if (rowCount <= 0) continue;
 
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) {
-      rows.push(afterCut.slice(r * cols, r * cols + cols));
+      rows.push(tableArea.slice(r * cols, r * cols + cols));
     }
 
     const md: string[] = [];
@@ -187,72 +179,118 @@ function rebuildFlatTableToMarkdownOnly(text: string): string | null {
       md.push(`| ${row.map((c) => c.replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    // ✅ 표만 반환 (앞/뒤 문장 섞지 않음)
-    return md.join("\n");
+    // ✅ 결과: (표 위) + (표) + (표 아래)
+    const outParts = [];
+    if (before) outParts.push(before);
+    outParts.push(md.join("\n"));
+    if (tail) outParts.push(tail);
+
+    return outParts.join("\n\n").trim();
   }
 
   return null;
 }
 
-/** 본문을 "섹션 단위"로 잘라서 질문과 가장 관련 높은 섹션만 남기기 */
-function pickBestSectionByTokens(content: string, mustTokens: string[]): string {
-  const blocks = content
-    .split(/\n\s*\n/g)
-    .map((b) => b.trim())
-    .filter(Boolean);
+/** ✅ Markdown 표를 "항상 보이는" 고정폭 텍스트 표로 변환 */
+function mdTableToPlain(md: string): string {
+  const lines = md.split("\n").map((l) => l.trim());
+  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
+  if (tableLines.length < 3) return md;
 
-  if (blocks.length <= 1) return content.trim();
+  const rows = tableLines.map((l) =>
+    l
+      .slice(1, -1)
+      .split("|")
+      .map((c) => c.trim())
+  );
 
-  const score = (txt: string) => {
-    const lower = txt.toLowerCase();
-    const hit = mustTokens.filter((k) => lower.includes(k.toLowerCase())).length;
-    // 표/헤더가 있는 블록이면 가점
-    const hasTable =
-      (txt.includes("|") && txt.includes("---")) ||
-      txt.includes("구분") ||
-      txt.includes("경조유형") ||
-      txt.includes("휴가일수");
-    return hit + (hasTable ? 2 : 0) + Math.min(1, txt.length / 2000);
+  const header = rows[0];
+  const body = rows.slice(2);
+
+  const colCount = header.length;
+  const widths = new Array(colCount).fill(0);
+
+  const all = [header, ...body];
+  for (const r of all) {
+    for (let i = 0; i < colCount; i++) {
+      const v = (r[i] ?? "").toString();
+      widths[i] = Math.max(widths[i], v.length);
+    }
+  }
+
+  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
+  const joinRow = (r: string[]) =>
+    "│ " + r.map((c, i) => pad((c ?? "").toString(), widths[i])).join(" │ ") + " │";
+
+  const top = "┌ " + widths.map((w) => "─".repeat(w)).join(" ┬ ") + " ┐";
+  const mid = "├ " + widths.map((w) => "─".repeat(w)).join(" ┼ ") + " ┤";
+  const bot = "└ " + widths.map((w) => "─".repeat(w)).join(" ┴ ") + " ┘";
+
+  const out: string[] = [];
+  out.push(top);
+  out.push(joinRow(header));
+  out.push(mid);
+  for (const r of body) out.push(joinRow(r));
+  out.push(bot);
+  return out.join("\n");
+}
+
+/** 문서 내 마크다운 표 블록을 전부 plain table로 치환 */
+function makeTablesAlwaysReadable(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let buf: string[] = [];
+  let inTable = false;
+
+  const flush = () => {
+    if (buf.length) {
+      const md = buf.join("\n");
+      out.push(mdTableToPlain(md));
+      buf = [];
+    }
   };
 
-  const ranked = blocks
-    .map((b) => ({ b, s: score(b) }))
-    .sort((a, b) => b.s - a.s);
+  for (const l of lines) {
+    const t = l.trim();
+    const isTableLine = t.startsWith("|") && t.endsWith("|");
+    if (isTableLine) {
+      inTable = true;
+      buf.push(t);
+    } else {
+      if (inTable) {
+        flush();
+        inTable = false;
+      }
+      out.push(l);
+    }
+  }
+  if (inTable) flush();
 
-  // 가장 관련 높은 1~2개만 (너무 길게 붙지 않게)
-  const top = ranked.slice(0, 2).map((x) => x.b);
-
-  return top.join("\n\n").trim();
+  return out.join("\n").trim();
 }
 
-/** 최종 chunk 포맷: (1) 표 복원 가능하면 표만 출력, (2) 아니면 섹션에서 가장 관련 높은 부분만 */
-function formatChunkContent(content: string, mustTokens: string[]): string {
-  // 1) "한 줄씩 풀린 표"를 Markdown 표로 복원 (표만 반환)
-  const rebuiltTableOnly = rebuildFlatTableToMarkdownOnly(content);
-  if (rebuiltTableOnly) return rebuiltTableOnly.trim();
-
-  // 2) 이미 Markdown 표가 들어있는 경우: 표가 있는 블록만 선택되도록 섹션 선택
-  const best = pickBestSectionByTokens(content, mustTokens);
-
-  // 3) 마지막: 그냥 원문
-  return best.trim();
+/** 최종 chunk 포맷 */
+function formatChunkContent(content: string): string {
+  const rebuilt = rebuildFlatTableWithContext(content);
+  const text = (rebuilt ?? content).trim();
+  return makeTablesAlwaysReadable(text);
 }
 
-function toAnswer(hits: Hit[], intent: "A" | "B" | "C", mustTokens: string[]) {
-  // 길고 구조적인 것을 우선 (표/섹션 우선)
+function toAnswer(hits: Hit[], intent: "A" | "B" | "C") {
+  // 길고 구조적인 것을 우선
   const sorted = [...hits].sort((a, b) => (b.content?.length ?? 0) - (a.content?.length ?? 0));
 
   const body =
     `분류: 의도 ${intent}\n\n` +
     sorted
       .map((h) => {
-        const formatted = formatChunkContent((h.content ?? "").toString(), mustTokens);
-        return `📌 ${h.filename}\n${formatted}\n\n출처: ${h.filename} / 조각 ${h.chunk_index}`;
+        const formatted = formatChunkContent((h.content ?? "").toString());
+        return `[${h.filename} / 조각 ${h.chunk_index}]\n${formatted}`;
       })
       .join("\n\n────────────────────────\n\n");
 
   const citations = sorted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
-  return { text: body.trim(), citations };
+  return { text: body, citations };
 }
 
 export async function POST(req: Request) {
@@ -330,7 +368,7 @@ export async function POST(req: Request) {
 
     const pool = (lockedHits && lockedHits.length ? lockedHits : hits) as any[];
 
-    // 4) 질문 토큰 포함률로 재정렬 (엉뚱한 섹션 섞임 최소화)
+    // ✅ 질문 토큰 포함률 기반으로 chunk를 재정렬/필터하여 "기타" 등 엉뚱한 섹션 섞임을 줄임
     const must = extractTokens(question);
     function tokenHitRate(t: string) {
       const lower = (t ?? "").toLowerCase();
@@ -342,7 +380,7 @@ export async function POST(req: Request) {
       .map((h) => ({ ...h, rate: tokenHitRate(h.content ?? "") }))
       .sort((a, b) => (b.rate - a.rate) || ((b.content?.length ?? 0) - (a.content?.length ?? 0)));
 
-    const finalHits: Hit[] = scored.slice(0, 3).map((h) => ({
+    const finalHits: Hit[] = scored.slice(0, 4).map((h) => ({
       document_id: h.document_id,
       filename: h.filename,
       chunk_index: h.chunk_index,
@@ -350,7 +388,7 @@ export async function POST(req: Request) {
       sim: h.sim,
     }));
 
-    const { text, citations } = toAnswer(finalHits, intent, must);
+    const { text, citations } = toAnswer(finalHits, intent);
     return NextResponse.json({ answer: text, citations });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
