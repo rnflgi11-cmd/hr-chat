@@ -325,7 +325,10 @@ function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
 
   formatted.sort((a, b) => Number(b.hasTable) - Number(a.hasTable));
 
-  let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
+  let body = formatted
+    .map((h) => h.formatted)
+    .join("\n\n────────────────────────\n\n");
+
   body = cleanText(body);
 
   const citations = formatted.map((h) => ({
@@ -337,12 +340,14 @@ function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
     .map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`)
     .join("\n");
 
-  // ✅ 분류 문구 완전 제거 (이제 answer에는 안 들어감)
-  const out =
+  let out =
     body +
     (sourceLines ? `\n\n[출처]\n${sourceLines}` : "");
 
-  return { answer: out.trim(), citations };
+  // ✅ 최종 보험 처리 (본문 어디에 있든 싹 제거)
+  out = out.replace(/분류\s*:\s*의도\s*[ABC]\s*/g, "").trim();
+
+  return { answer: out, citations };
 }
 
 export async function POST(req: Request) {
