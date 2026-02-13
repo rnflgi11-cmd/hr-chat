@@ -255,10 +255,15 @@ export default function AdminPage() {
             </div>
 
             <div style={{ display: "flex", gap: 8 }}>
-              <a href="/chat" style={{ ...btn, textDecoration: "none", display: "inline-block" }}>
-                채팅으로
-              </a>
-            </div>
+  <a href="/chat" style={{ ...btn, textDecoration: "none", display: "inline-block" }}>
+    채팅
+  </a>
+
+  <a href="/admin/users" style={{ ...btn, textDecoration: "none", display: "inline-block" }}>
+    사용자 관리
+  </a>
+</div>
+
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
@@ -392,5 +397,5 @@ export default function AdminPage() {
       </div>
     </div>
   );
-  
+
 }
