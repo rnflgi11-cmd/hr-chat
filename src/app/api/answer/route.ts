@@ -432,7 +432,7 @@ export async function POST(req: Request) {
       q: question,
       tokens,
       file_hint: fileHint,
-      match_count: 18,
+      match_count: 40,
       min_sim: 0.12,
     });
     if (error) throw new Error(error.message);
@@ -484,7 +484,7 @@ export async function POST(req: Request) {
       doc_id: bestDocId,
       q: question,
       tokens,
-      match_count: 22,
+      match_count: 40,
       min_sim: 0.10,
     });
     if (lockErr) throw new Error(lockErr.message);
@@ -554,7 +554,7 @@ if (needsMoreLeaveTable) {
   if (extras.length) finalHits = [...finalHits, ...extras];
 }
     if (tableFirst) {
-      const picked = [tableFirst, ...top.filter((x) => x !== tableFirst)].slice(0, 5);
+  const picked = [tableFirst, ...top.filter((x) => x !== tableFirst)].slice(0, 12);
       finalHits = picked.map((h) => ({
         document_id: h.document_id,
         filename: h.filename,
@@ -563,7 +563,7 @@ if (needsMoreLeaveTable) {
         sim: h.sim,
       }));
     } else {
-      finalHits = scored.slice(0, 4).map((h) => ({
+      finalHits = scored.slice(0, 8).map((h) => ({
         document_id: h.document_id,
         filename: h.filename,
         chunk_index: h.chunk_index,
