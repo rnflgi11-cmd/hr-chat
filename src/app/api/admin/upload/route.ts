@@ -8,6 +8,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const BUCKET = "hr-docs";
+const MAX_FILES_PER_REQUEST = 30;
+const CHUNK_SIZE = 1200;
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -21,7 +23,8 @@ function getSupabaseAdmin() {
   });
 }
 
-function chunkTextSmart(text: string, size = 1200) {
+/** 의미 단위 chunk + 과대 단락은 size로 분할 */
+function chunkTextSmart(text: string, size = CHUNK_SIZE) {
   const cleaned = (text ?? "").replace(/\r/g, "").trim();
   if (!cleaned) return [];
 
@@ -70,6 +73,8 @@ function htmlTableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
 
     $tr.find("th, td").each((__, td) => {
       const $td = $(td);
+
+      // 셀 내부 줄바꿈 유지: <br> -> \n
       $td.find("br").replaceWith("\n");
 
       const text = $td.text();
@@ -108,12 +113,14 @@ function htmlTableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
 function htmlToTextKeepingTables(html: string) {
   const $ = cheerio.load(html);
 
+  // 표를 MD로 치환
   $("table").each((_, el) => {
     const md = htmlTableToMarkdown($, el);
     if (md) $(el).replaceWith(`\n\n${md}\n\n`);
     else $(el).remove();
   });
 
+  // 문단/리스트 줄바꿈 유지
   $("p").each((_, el) => {
     const t = normalizeInline($(el).text());
     $(el).text(t ? t : "");
@@ -137,45 +144,79 @@ function isDocx(name: string) {
   return name.toLowerCase().trim().endsWith(".docx");
 }
 
+function makeStoragePath(ext: string) {
+  return `docs/${new Date().toISOString().slice(0, 10)}/${Date.now()}_${Math.random()
+    .toString(16)
+    .slice(2)}.${ext}`;
+}
+
+type PerFileResult = {
+  filename: string;
+  ok: boolean;
+  error?: string;
+  document_id?: string;
+  chunks?: number;
+};
+
+async function rollbackAll(
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
+  docId: string | null,
+  storagePath: string | null
+) {
+  // 롤백은 "최대한 정리"가 목적이므로 에러 무시
+  if (docId) {
+    try {
+      await supabaseAdmin.from("document_chunks").delete().eq("document_id", docId);
+    } catch {}
+    try {
+      await supabaseAdmin.from("documents").delete().eq("id", docId);
+    } catch {}
+  }
+  if (storagePath) {
+    try {
+      await supabaseAdmin.storage.from(BUCKET).remove([storagePath]);
+    } catch {}
+  }
+}
+
 export async function POST(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin();
 
   try {
     const formData = await req.formData();
-    const userRaw = formData.get("user") as string | null;
 
-    // ✅ 다중 파일
+    const userRaw = formData.get("user") as string | null;
     const files = formData.getAll("file").filter(Boolean) as File[];
 
-    if (!userRaw) {
-      return NextResponse.json({ error: "사용자 정보 누락" }, { status: 400 });
-    }
-    if (!files.length) {
-      return NextResponse.json({ error: "파일이 없습니다." }, { status: 400 });
+    if (!userRaw) return NextResponse.json({ error: "사용자 정보 누락" }, { status: 400 });
+    if (!files.length) return NextResponse.json({ error: "파일이 없습니다." }, { status: 400 });
+
+    let user: any = null;
+    try {
+      user = JSON.parse(userRaw);
+    } catch {
+      return NextResponse.json({ error: "user JSON 파싱 실패" }, { status: 400 });
     }
 
-    const user = JSON.parse(userRaw);
-    if (user.role !== "admin") {
+    if (user?.role !== "admin") {
       return NextResponse.json({ error: "관리자만 업로드 가능" }, { status: 403 });
     }
 
-    // ✅ 파일별 결과 누적
-    const results: Array<{
-      filename: string;
-      ok: boolean;
-      error?: string;
-      document_id?: string;
-      chunks?: number;
-    }> = [];
-
-    // 너무 많은 파일을 한 번에 올릴 때 방어 (원하면 숫자 조절)
-    if (files.length > 30) {
-      return NextResponse.json({ error: "한 번에 최대 30개 파일까지 업로드 가능합니다." }, { status: 400 });
+    if (files.length > MAX_FILES_PER_REQUEST) {
+      return NextResponse.json(
+        { error: `한 번에 최대 ${MAX_FILES_PER_REQUEST}개 파일까지 업로드 가능합니다.` },
+        { status: 400 }
+      );
     }
 
+    const results: PerFileResult[] = [];
+
     for (const file of files) {
+      let storagePath: string | null = null;
+      let docId: string | null = null;
+
       try {
-        // 0) docx 체크
+        // 0) 확장자 체크
         if (!isDocx(file.name)) {
           results.push({
             filename: file.name,
@@ -185,28 +226,24 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // 1) buffer
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
-        // 1) Storage 업로드
-        const storagePath = `docs/${new Date().toISOString().slice(0, 10)}/${Date.now()}_${Math.random()
-          .toString(16)
-          .slice(2)}.docx`;
-
-        const { error: uploadError } = await supabaseAdmin.storage
-          .from(BUCKET)
-          .upload(storagePath, buffer, {
-            contentType:
-              file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            upsert: false,
-          });
+        // 2) storage 업로드
+        storagePath = makeStoragePath("docx");
+        const { error: uploadError } = await supabaseAdmin.storage.from(BUCKET).upload(storagePath, buffer, {
+          contentType: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          upsert: false,
+        });
 
         if (uploadError) {
           results.push({ filename: file.name, ok: false, error: `storage upload failed: ${uploadError.message}` });
+          storagePath = null; // 업로드 실패이니 롤백 필요 없음
           continue;
         }
 
-        // 2) documents insert
+        // 3) documents insert
         const { data: docInsert, error: docError } = await supabaseAdmin
           .from("documents")
           .insert({
@@ -219,30 +256,39 @@ export async function POST(req: NextRequest) {
           .single();
 
         if (docError || !docInsert?.id) {
-          // storage 업로드는 됐는데 documents 실패 → storage 롤백 시도
-          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
-          results.push({ filename: file.name, ok: false, error: `documents insert failed: ${docError?.message ?? "unknown"}` });
+          await rollbackAll(supabaseAdmin, null, storagePath);
+          results.push({
+            filename: file.name,
+            ok: false,
+            error: `documents insert failed: ${docError?.message ?? "unknown"}`,
+          });
           continue;
         }
 
-        // 3) DOCX → HTML (표 보존)
+        docId = docInsert.id;
+        const documentId = docInsert.id; // ✅ string 확정(타입 문제 방지)
+
+        // 4) docx -> html (표 보존)
         const { value: html } = await mammoth.convertToHtml({ buffer });
 
-        // 4) HTML → text (표는 MD)
+        // 5) html -> text (표는 md)
         const text = htmlToTextKeepingTables(html);
         if (!text) {
-          // documents까지 만들어졌으면 정리(롤백)
-          await supabaseAdmin.from("document_chunks").delete().eq("document_id", docInsert.id).catch(() => {});
-          await supabaseAdmin.from("documents").delete().eq("id", docInsert.id).catch(() => {});
-          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+          await rollbackAll(supabaseAdmin, docId, storagePath);
           results.push({ filename: file.name, ok: false, error: "문서에서 텍스트를 추출하지 못했습니다." });
           continue;
         }
 
-        // 5) chunk insert
-        const chunks = chunkTextSmart(text, 1200);
+        // 6) chunk insert
+        const chunks = chunkTextSmart(text, CHUNK_SIZE);
+        if (!chunks.length) {
+          await rollbackAll(supabaseAdmin, docId, storagePath);
+          results.push({ filename: file.name, ok: false, error: "청크 생성 실패(텍스트가 비어있음)" });
+          continue;
+        }
+
         const rows = chunks.map((content, idx) => ({
-          document_id: docInsert.id,
+          document_id: documentId, // ✅ 여기!
           chunk_index: idx,
           content,
         }));
@@ -250,21 +296,19 @@ export async function POST(req: NextRequest) {
         const { error: chunkError } = await supabaseAdmin.from("document_chunks").insert(rows);
 
         if (chunkError) {
-          // 실패 시 정리(롤백)
-          await supabaseAdmin.from("document_chunks").delete().eq("document_id", docInsert.id).catch(() => {});
-          await supabaseAdmin.from("documents").delete().eq("id", docInsert.id).catch(() => {});
-          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+          await rollbackAll(supabaseAdmin, docId, storagePath);
           results.push({ filename: file.name, ok: false, error: `chunk insert failed: ${chunkError.message}` });
           continue;
         }
 
-        results.push({
-          filename: file.name,
-          ok: true,
-          document_id: docInsert.id,
-          chunks: rows.length,
-        });
+       results.push({
+  filename: file.name,
+  ok: true,
+  document_id: documentId, // ✅ docId 말고 documentId!
+  chunks: rows.length,
+});
       } catch (e: any) {
+        await rollbackAll(supabaseAdmin, docId, storagePath);
         results.push({ filename: file.name, ok: false, error: e?.message ?? "업로드 중 오류" });
       }
     }
