@@ -301,27 +301,26 @@ export default function ChatPage() {
                       }}
                     >
                       {m.role === "assistant" ? (
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            분류: 의도 {(m.intent ?? "C") as string}
-                          </div>
+  <div style={{ display: "grid", gap: 10 }}>
+    {/* 의도(intent) 표시 숨김 */}
 
-                          {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
+    {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
 
-                          {m.chunks && m.chunks.length > 0 && (
-                            <>
-                              <div style={{ fontSize: 13, fontWeight: 900 }}>관련 규정 원문</div>
-                              <div style={{ display: "grid", gap: 10 }}>
-                                {m.chunks.map((c, i) => (
-                                  <ChunkCard key={`${c.filename}-${c.chunk_index}-${i}`} c={c} />
-                                ))}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ) : (
-                        m.content
-                      )}
+    {m.chunks && m.chunks.length > 0 && (
+      <>
+        <div style={{ fontSize: 13, fontWeight: 900 }}>관련 규정 원문</div>
+        <div style={{ display: "grid", gap: 10 }}>
+          {m.chunks.map((c, i) => (
+            <ChunkCard key={`${c.filename}-${c.chunk_index}-${i}`} c={c} />
+          ))}
+        </div>
+      </>
+    )}
+  </div>
+) : (
+  m.content
+)}
+
                     </div>
                   </div>
                 );
