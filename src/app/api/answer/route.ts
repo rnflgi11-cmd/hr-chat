@@ -328,15 +328,17 @@ function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
   let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
   body = cleanText(body);
 
-  // ✅ (추가) 본문에 섞여 들어온 "분류: 의도 X" 라인은 전부 제거
-  // (맨 위 타이틀은 아래에서 다시 넣으니 문제 없음)
-  
+  const citations = formatted.map((h) => ({
+    filename: h.filename,
+    chunk_index: h.chunk_index,
+  }));
 
-  const citations = formatted.map((h) => ({ filename: h.filename, chunk_index: h.chunk_index }));
-  const sourceLines = citations.map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`).join("\n");
+  const sourceLines = citations
+    .map((c) => `- ${c.filename} / 조각 ${c.chunk_index}`)
+    .join("\n");
 
+  // ✅ 분류 문구 완전 제거 (이제 answer에는 안 들어감)
   const out =
-    `분류: 의도 ${intent}\n\n` +
     body +
     (sourceLines ? `\n\n[출처]\n${sourceLines}` : "");
 
@@ -383,7 +385,8 @@ export async function POST(req: Request) {
     }
 
     if (!hits.length) {
-      return NextResponse.json({ answer: `분류: 의도 ${intent}\n\n${FALLBACK}`, citations: [] });
+      return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
+
     }
 
     // 3) 문서 점수 집계 (sim + count + filename 힌트 가중)
@@ -460,8 +463,8 @@ export async function POST(req: Request) {
       }));
     }
 
-    const { answer, citations } = buildAnswer(intent, finalHits);
-    return NextResponse.json({ answer, citations });
+const { answer, citations } = buildAnswer(intent, finalHits);
+return NextResponse.json({ intent, answer, citations });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }
