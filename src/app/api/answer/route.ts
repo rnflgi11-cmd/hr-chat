@@ -104,11 +104,10 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
 }
 
 /**
- * ✅ 단단한 표 복원기:
- * - 한 chunk 안에 표가 여러 개 있어도 끝까지 스캔해서 모두 복원
- * - "기타"처럼 섹션 시작 단어가 표의 첫 컬럼 값인 경우, firstColAllow면 표로 인정(컷 금지)
- * - 마지막 컬럼(비고 등)이 비어 cols가 안 맞는 경우 패딩으로 복원
- * - ✅/📌 마커로 섹션 시작을 감지해 표 밖으로 분리
+ * ✅ 표 복원기 (멀티-표 + 기타휴가 표 전용)
+ * - 경조휴가 표: 단순 6컬럼 묶기
+ * - 기타휴가(구분/유형/내용/휴가일수/첨부서류/비고) 표: "휴가 카테고리" 그룹 기반 전용 파서
+ * - consumedUntil은 반드시 i(실제로 읽은 끝)로: 표 뒤 내용 누락 방지
  */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
@@ -118,23 +117,27 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
   if (raw.length < 8) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 
-  type Cand = { headers: string[]; kind?: "default" | "leave6"; firstColAllow?: Set<string> };
+  type Cand = {
+    headers: string[];
+    kind?: "default" | "leave6" | "leaveStructured";
+    firstColAllow?: Set<string>;
+  };
 
   const cands: Cand[] = [
-    // 경조휴가 표
+    // 경조휴가
     {
       headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
       kind: "default",
       firstColAllow: new Set(["경사", "조의"]),
     },
 
-    // ✅ 기타휴가(공가 포함) 표
+    // ✅ 기타휴가(공가 포함) - 스샷 형태
     {
       headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"],
-      kind: "leave6",
+      kind: "leaveStructured",
     },
 
-    // 기타 후보들
+    // 기타 후보
     { headers: ["구분", "내용"], kind: "default" },
     { headers: ["항목", "지원대상", "신청 기준일"], kind: "default" },
     { headers: ["항목", "지원 대상", "신청 기준일"], kind: "default" },
@@ -159,6 +162,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
   ]);
 
   const startsWithMarker = (s: string) => s.startsWith("✅") || s.startsWith("📌");
+  const isDivider = (s: string) => /^[─-]{5,}$/.test((s ?? "").replace(/\s+/g, ""));
 
   function matchHeaderAt(i: number): Cand | null {
     const sorted = [...cands].sort((a, b) => b.headers.length - a.headers.length);
@@ -177,9 +181,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     return null;
   }
 
-  // ✅ 기본 파서(단순 cols 묶기)
   function rowsFromCellsDefault(cells: string[], cols: number, cand: Cand): string[][] {
-    // remainder는 무조건 살림
     if (cells.length % cols !== 0) {
       while (cells.length % cols !== 0) cells.push("");
     }
@@ -188,7 +190,6 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) rows.push(cells.slice(r * cols, r * cols + cols));
 
-    // firstColAllow 검증(경조 표만)
     if (cand.firstColAllow) {
       let cut = rows.length;
       for (let r = 0; r < rows.length; r++) {
@@ -204,8 +205,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     return rows;
   }
 
-  // ✅ 기타휴가(6컬럼) 전용 파서
-  // - 구분 칼럼(기타)이 반복되고, 어떤 추출기에서는 빈칸 셀이 날아가서 왼쪽으로 땡겨지는 걸 복구
+  // (옵션) leave6가 필요한 경우 대비해 남겨둠
   function rowsFromCellsLeave6(cells: string[], cols: number): string[][] {
     const firstSet = new Set(["기타", "공가", "경사", "조의"]);
     let prevFirst = "";
@@ -222,22 +222,17 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     for (const cell of cells) {
       const v = (cell ?? "").trim();
       if (!v) continue;
+      if (isDivider(v)) continue;
 
-      // 첫 컬럼 후보가 나오면 새 행 시작
       if (firstSet.has(v)) {
         if (row.length > 0) pushRow(row);
         row = [v];
         continue;
       }
 
-      // 새 행인데 첫 컬럼이 안 나오면 이전 첫 컬럼을 carry
-      if (row.length === 0) {
-        row = prevFirst ? [prevFirst, v] : [v];
-      } else {
-        row.push(v);
-      }
+      if (row.length === 0) row = prevFirst ? [prevFirst, v] : [v];
+      else row.push(v);
 
-      // cols 도달 시 행 확정
       if (row.length >= cols) {
         pushRow(row.slice(0, cols));
         row = row.slice(cols);
@@ -245,30 +240,64 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     }
 
     if (row.length > 0) pushRow(row);
-
-    // 너무 짧은 행(꼬리) 제거
     return rows.filter((r) => r.filter((x) => (x ?? "").trim()).length >= 3);
+  }
+
+  // ✅ 스샷의 “기타휴가 표” 전용: "휴가 카테고리(법정·의무 휴가 ...)"를 구분으로 잡고 5개씩 행 구성
+  function parseLeaveStructured(lines: string[]): string[][] {
+    const rows: string[][] = [];
+
+    const isHeaderWord = (s: string) =>
+      s === "구분" || s === "유형" || s === "내용" || s === "휴가일수" || s === "첨부서류" || s === "비고";
+
+    const isGroupTitle = (s: string) => s.includes("휴가") && !s.includes("휴가일수");
+
+    let currentGroup = "";
+    let buf: string[] = [];
+
+    for (const rawLine of lines) {
+      const s = (rawLine ?? "").trim();
+      if (!s) continue;
+      if (isDivider(s)) continue;
+      if (isHeaderWord(s)) continue;
+
+      // ✅ 구분(카테고리) 전환
+      if (isGroupTitle(s)) {
+        currentGroup = s;
+        buf = [];
+        continue;
+      }
+
+      if (!currentGroup) continue;
+
+      buf.push(s);
+
+      // 유형/내용/휴가일수/첨부서류/비고 = 5개
+      if (buf.length >= 5) {
+        const [type, content, days, doc, note] = buf.slice(0, 5);
+        rows.push([currentGroup, type, content, days, doc, note]);
+        buf = buf.slice(5);
+      }
+    }
+
+    return rows;
   }
 
   function parseTable(from: number, cand: Cand): { md: string; consumedUntil: number; hasTable: boolean } {
     const headers = cand.headers;
     const cols = headers.length;
 
-    let i = from + cols; // 헤더 다음부터
+    let i = from + cols;
     const cells: string[] = [];
 
     while (i < raw.length) {
       const line = raw[i];
 
-      // 다음 표 헤더 만나면 stop
       if (matchHeaderAt(i)) break;
-
-      // ✅ 마커(✅/📌)면 stop
       if (startsWithMarker(line)) break;
 
-      // ✅ default 표에서만 섹션 키워드로 stop
-      // leave6(기타휴가)은 “기타”가 표 셀이라 섹션 컷을 약하게
-      if (cand.kind !== "leave6" && sectionStarts.has(line)) break;
+      // ✅ leaveStructured/leave6는 표 내부에 섹션 성격 텍스트가 섞일 수 있어 섹션 컷을 약하게
+      if (cand.kind !== "leave6" && cand.kind !== "leaveStructured" && sectionStarts.has(line)) break;
 
       cells.push(line);
       i++;
@@ -276,10 +305,14 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
     if (cells.length < cols) return { md: "", consumedUntil: from + 1, hasTable: false };
 
-    const rows =
-      cand.kind === "leave6" && cols === 6 && headers[1] === "유형"
-        ? rowsFromCellsLeave6([...cells], cols)
-        : rowsFromCellsDefault([...cells], cols, cand);
+    let rows: string[][] = [];
+    if (cand.kind === "leaveStructured" && cols === 6) {
+      rows = parseLeaveStructured(cells);
+    } else if (cand.kind === "leave6" && cols === 6) {
+      rows = rowsFromCellsLeave6([...cells], cols);
+    } else {
+      rows = rowsFromCellsDefault([...cells], cols, cand);
+    }
 
     if (!rows.length) return { md: "", consumedUntil: from + 1, hasTable: false };
 
@@ -290,7 +323,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
       mdLines.push(`| ${r.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    // ✅ 핵심: “표로 읽어들인 영역 끝(i)”까지 통째로 소비해야 아래가 안 잘림
+    // ✅ 핵심: 실제로 읽은 끝(i)까지 소비해야 뒤 내용이 표 밖으로 떨어지지 않음
     const consumedUntil = i;
 
     return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil, hasTable: true };
@@ -322,7 +355,6 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
   return { rebuilt: out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), hasTable: foundAny };
 }
-
 
 /** 표(마크다운 |...|)가 있으면 codeblock으로 감싸기 */
 function wrapAnyMarkdownTableAsCodeblock(text: string): string {
@@ -363,7 +395,6 @@ function cleanText(t: string) {
   return (t ?? "")
     .toString()
     .replace(/\[BUILD_MARK_[^\]]+\]/g, "")
-    // ✅ intent 라인은 제거 (전각 콜론/nbsp/제로폭 공백까지 커버)
     .replace(/분류[\s\u00A0\u200B]*[:：][\s\u00A0\u200B]*의도[\s\u00A0\u200B]*[ABC]\s*/g, "")
     .replace(/^\[[^\]]+\/\s*조각\s*\d+\]$/gm, "")
     .replace(/^📌.*$/gm, "")
@@ -444,7 +475,7 @@ export async function POST(req: Request) {
         q: question,
         tokens,
         file_hint: null,
-        match_count: 18,
+        match_count: 40,
         min_sim: 0.12,
       });
       hits = (retry.data ?? []) as any[];
@@ -485,7 +516,7 @@ export async function POST(req: Request) {
       q: question,
       tokens,
       match_count: 40,
-      min_sim: 0.10,
+      min_sim: 0.08,
     });
     if (lockErr) throw new Error(lockErr.message);
 
@@ -502,59 +533,13 @@ export async function POST(req: Request) {
       })
       .sort((a, b) => b.score - a.score);
 
-    // 6) 표가 잡히면 표 chunk를 포함하도록 선택
-    const top = scored.slice(0, 10);
+    // 6) 표가 있으면 넉넉히 선택(조각 분절 대응)
+    const top = scored.slice(0, 16);
     const tableFirst = top.find((h) => rebuildFlatTableWithContext(h.content ?? "").hasTable);
+
     let finalHits: Hit[] = [];
-// ✅ (추가) "기타 휴가 표" 헤더가 보이는데 내용이 짤린 경우, 같은 문서에서 추가 조각을 더 가져온다
-const needsMoreLeaveTable = finalHits.some((h) => {
-  const t = (h.content ?? "").toString();
-
-  const hasLeaveHeader =
-    t.includes("구분") &&
-    t.includes("유형") &&
-    t.includes("내용") &&
-    t.includes("휴가일수") &&
-    t.includes("첨부서류") &&
-    t.includes("비고");
-
-  // 스샷에 있어야 하는 키워드들이 없으면 "잘렸을 가능성"이 높음
-  const seemsTruncated =
-    hasLeaveHeader &&
-    !(t.includes("직무교육") || t.includes("병가") || t.includes("연차 차감") || t.includes("연차차감") || t.includes("없음"));
-
-  return seemsTruncated;
-});
-
-if (needsMoreLeaveTable) {
-  const extraTokens = ["기타", "휴가", "병역의무", "민방위", "예비군", "직무교육", "병가", "연차", "차감", "없음"];
-  const extraQ = "기타 휴가 병역의무 민방위 예비군 직무교육 병가 연차 차감 없음";
-
-  const { data: extraHits } = await supabaseAdmin.rpc("search_chunks_in_document", {
-    doc_id: bestDocId,
-    q: extraQ,
-    tokens: extraTokens,
-    match_count: 10,
-    min_sim: 0.05,
-  });
-
-  const extras = ((extraHits ?? []) as any[])
-    // 이미 있는 chunk는 중복 제거
-    .filter((x) => !finalHits.some((h) => h.document_id === x.document_id && h.chunk_index === x.chunk_index))
-    // 상위 2개만 추가 (너무 길어지는 것 방지)
-    .slice(0, 2)
-    .map((h) => ({
-      document_id: h.document_id,
-      filename: h.filename,
-      chunk_index: h.chunk_index,
-      content: h.content,
-      sim: h.sim,
-    })) as Hit[];
-
-  if (extras.length) finalHits = [...finalHits, ...extras];
-}
     if (tableFirst) {
-  const picked = [tableFirst, ...top.filter((x) => x !== tableFirst)].slice(0, 12);
+      const picked = [tableFirst, ...top.filter((x) => x !== tableFirst)].slice(0, 12);
       finalHits = picked.map((h) => ({
         document_id: h.document_id,
         filename: h.filename,
