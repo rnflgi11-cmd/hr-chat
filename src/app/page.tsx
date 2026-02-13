@@ -111,7 +111,7 @@ export default function LoginPage() {
                 style={inputStyle}
                 autoComplete="name"
                 autoFocus
-                placeholder="예: 김인호"
+                placeholder="예: 이름을 입력하세요"
               />
             </div>
 
@@ -122,7 +122,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmpNo(e.target.value)}
                 style={inputStyle}
                 autoComplete="off"
-                placeholder="예: HR001"
+                placeholder="예: 사원번호를 입력하세요"
               />
             </div>
 
