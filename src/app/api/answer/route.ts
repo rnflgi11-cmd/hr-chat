@@ -118,33 +118,35 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
   if (raw.length < 8) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 
-  type Cand = { headers: string[]; firstColAllow?: Set<string> };
+  type Cand = { headers: string[]; firstColAllow?: Set<string>; kind?: "default" | "leave6" };
 
   const cands: Cand[] = [
     // 경조휴가 표
     {
       headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
       firstColAllow: new Set(["경사", "조의"]),
+      kind: "default",
     },
-    // 기타휴가 표
+
+    // ✅ 기타휴가(공가 포함) 표: 구분/유형/내용/휴가일수/첨부서류/비고
+    // (DOCX에서 구분 칸이 다음 행부터 비는 경우가 많아서 전용 파서 사용)
     {
       headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"],
-      firstColAllow: new Set(["기타"]),
+      kind: "leave6",
     },
+
     // 간단 표
-    { headers: ["구분", "내용"] },
+    { headers: ["구분", "내용"], kind: "default" },
 
     // 기타 후보
-    { headers: ["항목", "지원대상", "신청 기준일"] },
-    { headers: ["항목", "지원 대상", "신청 기준일"] },
-    { headers: ["구분", "기준", "포상 금액"] },
-    { headers: ["구분", "내용", "지급 비용", "비고"] },
-    { headers: ["구분", "내용", "지급비용", "비고"] },
+    { headers: ["항목", "지원대상", "신청 기준일"], kind: "default" },
+    { headers: ["항목", "지원 대상", "신청 기준일"], kind: "default" },
+    { headers: ["구분", "기준", "포상 금액"], kind: "default" },
+    { headers: ["구분", "내용", "지급 비용", "비고"], kind: "default" },
+    { headers: ["구분", "내용", "지급비용", "비고"], kind: "default" },
   ];
 
   const sectionStarts = new Set([
-    // ✅ "기타"는 섹션 시작일 수도 있지만, 기타휴가 표의 첫 컬럼 값이기도 함
-    // -> 표 파싱에서는 firstColAllow.has("기타")이면 컷하지 않도록 처리함
     "기타",
     "참고사항",
     "유의사항",
@@ -179,53 +181,19 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     return null;
   }
 
-  function parseTable(from: number, cand: Cand): { md: string; consumedUntil: number; hasTable: boolean } {
-    const headers = cand.headers;
-    const cols = headers.length;
-
-    let i = from + cols; // headers 끝 다음
-    const cells: string[] = [];
-
-    while (i < raw.length) {
-      const line = raw[i];
-
-      // 다음 표 헤더 시작이면 stop
-      if (matchHeaderAt(i)) break;
-
-      // ✅ 섹션 시작 단어/마커면 stop
-      // 단, 섹션 시작 단어가 표의 첫 컬럼 후보(firstColAllow)에 포함되면 "표 셀"로 인정하고 끊지 않음
-      if ((sectionStarts.has(line) && !(cand.firstColAllow?.has(line))) || startsWithMarker(line)) break;
-
-      cells.push(line);
-      i++;
+  // ✅ 기본 파서(단순 cols 묶기)
+  function parseDefault(cells: string[], cols: number, cand: Cand): string[][] {
+    // remainder는 무조건 패딩해서 살림
+    if (cells.length % cols !== 0) {
+      while (cells.length % cols !== 0) cells.push("");
     }
-
-    // ✅ cols 불일치(마지막 비고 누락 등) 패딩
-    if (cells.length > 0 && cells.length < cols) {
-      // 최소 행으로 인정할 정도면 빈칸 채움(6컬럼이면 4개 이상)
-      if (cells.length >= Math.max(2, cols - 2)) {
-        while (cells.length < cols) cells.push("");
-      }
-    }
-
-    let rowCount = Math.floor(cells.length / cols);
-    if (rowCount <= 0) return { md: "", consumedUntil: from + 1, hasTable: false };
-
-    const remain = cells.length % cols;
-if (remain !== 0) {
-  // ✅ 남은 셀이 1개라도 있으면 마지막 행로 살린다 (빈칸 패딩)
-  while (cells.length % cols !== 0) cells.push("");
-  rowCount = Math.floor(cells.length / cols);
-}
-
+    const rowCount = Math.floor(cells.length / cols);
     const rows: string[][] = [];
-    for (let r = 0; r < rowCount; r++) {
-      rows.push(cells.slice(r * cols, r * cols + cols));
-    }
+    for (let r = 0; r < rowCount; r++) rows.push(cells.slice(r * cols, r * cols + cols));
 
-    // ✅ 첫 컬럼 검증(표 깨짐 방지)
-    let cut = rows.length;
+    // firstColAllow 검증(표 깨짐 방지)
     if (cand.firstColAllow) {
+      let cut = rows.length;
       for (let r = 0; r < rows.length; r++) {
         const c0 = (rows[r][0] ?? "").trim();
         if (c0 && !cand.firstColAllow.has(c0)) {
@@ -233,46 +201,127 @@ if (remain !== 0) {
           break;
         }
       }
+      return rows.slice(0, cut);
+    }
+    return rows;
+  }
+
+  // ✅ “기타휴가 표(6컬럼)” 전용 파서:
+  // - 구분(기타/공가/경사/조의)이 다음 행에서 비어서 셀들이 왼쪽으로 땡겨지는 문제를 복구
+  function parseLeave6(cells: string[], cols: number): string[][] {
+    const firstSet = new Set(["기타", "공가", "경사", "조의"]);
+    let prevFirst = ""; // 직전 행의 구분
+    let row: string[] = [];
+    const rows: string[][] = [];
+
+    const pushRow = (r: string[]) => {
+      const out = [...r];
+      while (out.length < cols) out.push("");
+      rows.push(out.slice(0, cols));
+      prevFirst = out[0] ?? prevFirst;
+    };
+
+    for (const cell of cells) {
+      // 섹션 마커가 셀로 들어온 경우(드물게)도 막기
+      if (!cell) continue;
+
+      // 구분 단어가 나오면 새 행 시작 신호로 강하게 취급
+      if (firstSet.has(cell)) {
+        if (row.length > 0) pushRow(row);
+        row = [cell];
+        continue;
+      }
+
+      // 새 행인데 구분이 안 나오면, 이전 구분을 carry 해서 채워 넣기
+      if (row.length === 0) {
+        row = prevFirst ? [prevFirst, cell] : [cell];
+      } else {
+        row.push(cell);
+      }
+
+      // cols에 도달하면 행 확정
+      if (row.length >= cols) {
+        pushRow(row.slice(0, cols));
+        row = row.slice(cols); // 혹시 overflow 있으면 다음 행로
+      }
     }
 
-    const safeRows = rows.slice(0, cut);
-    if (!safeRows.length) return { md: "", consumedUntil: from + cols, hasTable: false };
+    if (row.length > 0) pushRow(row);
+
+    // 너무 짧은 행(실제로 표가 아닌 꼬리) 제거: 2칸 이하 행은 버림
+    return rows.filter((r) => r.filter((x) => (x ?? "").trim()).length >= 3);
+  }
+
+  function parseTable(from: number, cand: Cand): { md: string; consumedUntil: number; hasTable: boolean } {
+    const headers = cand.headers;
+    const cols = headers.length;
+
+    let i = from + cols;
+    const cells: string[] = [];
+
+    while (i < raw.length) {
+      const line = raw[i];
+
+      if (matchHeaderAt(i)) break;
+
+      // 섹션/마커면 stop (단, leave6 표에서는 "기타"가 구분일 수 있으니 여기서는 끊지 않음)
+      if (startsWithMarker(line)) break;
+
+      // leave6 표에서는 "기타"를 포함한 섹션 키워드가 셀로 올 수 있으므로,
+      // 섹션 키워드로 끊는 것은 "default"에서만 강하게 적용
+      if (cand.kind !== "leave6" && sectionStarts.has(line)) break;
+
+      cells.push(line);
+      i++;
+    }
+
+    if (cells.length < cols) return { md: "", consumedUntil: from + 1, hasTable: false };
+
+    let rows: string[][] = [];
+    if (cand.kind === "leave6" && cols === 6 && headers[1] === "유형") {
+      rows = parseLeave6([...cells], cols);
+    } else {
+      rows = parseDefault([...cells], cols, cand);
+    }
+
+    if (!rows.length) return { md: "", consumedUntil: from + 1, hasTable: false };
 
     const mdLines: string[] = [];
     mdLines.push(`| ${headers.join(" | ")} |`);
     mdLines.push(`| ${headers.map(() => "---").join(" | ")} |`);
-    for (const row of safeRows) {
-      mdLines.push(`| ${row.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
+    for (const r of rows) {
+      mdLines.push(`| ${r.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    const usedCells = safeRows.length * cols;
-    const consumedUntil = from + cols + usedCells;
+    // ✅ consumedUntil은 우리가 cells로 가져간 만큼(표 영역 전체) 소비
+    // (이렇게 해야 표 뒤 텍스트가 누락되지 않음)
+    const consumedUntil = i;
 
     return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil, hasTable: true };
   }
 
   const out: string[] = [];
-  let i = 0;
+  let idx = 0;
   let foundAny = false;
 
-  while (i < raw.length) {
-    const cand = matchHeaderAt(i);
+  while (idx < raw.length) {
+    const cand = matchHeaderAt(idx);
     if (!cand) {
-      out.push(raw[i]);
-      i++;
+      out.push(raw[idx]);
+      idx++;
       continue;
     }
 
-    const parsed = parseTable(i, cand);
+    const parsed = parseTable(idx, cand);
     if (!parsed.hasTable) {
-      out.push(raw[i]);
-      i++;
+      out.push(raw[idx]);
+      idx++;
       continue;
     }
 
     foundAny = true;
     out.push(parsed.md);
-    i = parsed.consumedUntil;
+    idx = parsed.consumedUntil;
   }
 
   return { rebuilt: out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), hasTable: foundAny };
