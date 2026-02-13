@@ -7,7 +7,6 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ✅ 버킷명
 const BUCKET = "hr-docs";
 
 function getSupabaseAdmin() {
@@ -22,17 +21,12 @@ function getSupabaseAdmin() {
   });
 }
 
-/**
- * ✅ 표/문단/리스트 단위로 “의미 덩어리”를 우선 나누고,
- * 너무 긴 덩어리는 size 기준으로 추가 분할
- */
 function chunkTextSmart(text: string, size = 1200) {
   const cleaned = (text ?? "").replace(/\r/g, "").trim();
   if (!cleaned) return [];
 
-  // 코드블록/구분선 기준으로 먼저 덩어리화
   const blocks = cleaned
-    .split(/\n{2,}/g) // 빈 줄 2개 이상을 “단락”으로
+    .split(/\n{2,}/g)
     .map((b) => b.trim())
     .filter(Boolean);
 
@@ -42,13 +36,11 @@ function chunkTextSmart(text: string, size = 1200) {
       chunks.push(b);
       continue;
     }
-    // 너무 긴 단락은 강제 분할
     for (let i = 0; i < b.length; i += size) {
       const part = b.slice(i, i + size).trim();
       if (part) chunks.push(part);
     }
   }
-
   return chunks;
 }
 
@@ -78,8 +70,6 @@ function htmlTableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
 
     $tr.find("th, td").each((__, td) => {
       const $td = $(td);
-
-      // 셀 내부 줄바꿈 유지: <br>를 \n으로 바꾼 후 텍스트 추출
       $td.find("br").replaceWith("\n");
 
       const text = $td.text();
@@ -87,7 +77,7 @@ function htmlTableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
         .split("\n")
         .map((x) => normalizeInline(x))
         .filter(Boolean)
-        .join(" / "); // 셀 내부 줄바꿈은 " / "로 보존 (원하면 "\n"로 바꿔도 됨)
+        .join(" / ");
 
       cells.push(mdEscapeCell(cleaned));
     });
@@ -118,18 +108,12 @@ function htmlTableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
 function htmlToTextKeepingTables(html: string) {
   const $ = cheerio.load(html);
 
-  // ✅ 표를 Markdown으로 치환
   $("table").each((_, el) => {
     const md = htmlTableToMarkdown($, el);
-    if (md) {
-      $(el).replaceWith(`\n\n${md}\n\n`);
-    } else {
-      // 빈 표면 제거
-      $(el).remove();
-    }
+    if (md) $(el).replaceWith(`\n\n${md}\n\n`);
+    else $(el).remove();
   });
 
-  // 문단/리스트 줄바꿈 유지용 처리
   $("p").each((_, el) => {
     const t = normalizeInline($(el).text());
     $(el).text(t ? t : "");
@@ -142,26 +126,32 @@ function htmlToTextKeepingTables(html: string) {
     if (t) $(el).after("\n");
   });
 
-  // 전체 텍스트
   const text = $(("body") as any).text();
-
-  // 공백/줄바꿈 정리 (표 코드블록은 이미 포함됨)
   return text
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
 }
 
-export async function POST(req: NextRequest) {
-  try {
-    const supabaseAdmin = getSupabaseAdmin();
+function isDocx(name: string) {
+  return name.toLowerCase().trim().endsWith(".docx");
+}
 
+export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin();
+
+  try {
     const formData = await req.formData();
-    const file = formData.get("file") as File | null;
     const userRaw = formData.get("user") as string | null;
 
-    if (!file || !userRaw) {
-      return NextResponse.json({ error: "파일 또는 사용자 정보 누락" }, { status: 400 });
+    // ✅ 다중 파일
+    const files = formData.getAll("file").filter(Boolean) as File[];
+
+    if (!userRaw) {
+      return NextResponse.json({ error: "사용자 정보 누락" }, { status: 400 });
+    }
+    if (!files.length) {
+      return NextResponse.json({ error: "파일이 없습니다." }, { status: 400 });
     }
 
     const user = JSON.parse(userRaw);
@@ -169,87 +159,123 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "관리자만 업로드 가능" }, { status: 403 });
     }
 
-    // ✅ DOCX 강제 체크
-    const lower = file.name.toLowerCase().trim();
-    if (!lower.endsWith(".docx")) {
-      return NextResponse.json(
-        { error: "DOCX(.docx) 파일만 업로드 가능합니다. Word(.docx)로 저장 후 업로드해 주세요." },
-        { status: 400 }
-      );
+    // ✅ 파일별 결과 누적
+    const results: Array<{
+      filename: string;
+      ok: boolean;
+      error?: string;
+      document_id?: string;
+      chunks?: number;
+    }> = [];
+
+    // 너무 많은 파일을 한 번에 올릴 때 방어 (원하면 숫자 조절)
+    if (files.length > 30) {
+      return NextResponse.json({ error: "한 번에 최대 30개 파일까지 업로드 가능합니다." }, { status: 400 });
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    for (const file of files) {
+      try {
+        // 0) docx 체크
+        if (!isDocx(file.name)) {
+          results.push({
+            filename: file.name,
+            ok: false,
+            error: "DOCX(.docx) 파일만 업로드 가능합니다. Word(.docx)로 저장 후 업로드해 주세요.",
+          });
+          continue;
+        }
 
-    // 1) Storage 업로드
-    const ext = "docx";
-    const storagePath = `docs/${new Date().toISOString().slice(0, 10)}/${Date.now()}_${Math.random()
-      .toString(16)
-      .slice(2)}.${ext}`;
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
 
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from(BUCKET)
-      .upload(storagePath, buffer, {
-        contentType:
-          file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        upsert: false,
-      });
+        // 1) Storage 업로드
+        const storagePath = `docs/${new Date().toISOString().slice(0, 10)}/${Date.now()}_${Math.random()
+          .toString(16)
+          .slice(2)}.docx`;
 
-    if (uploadError) {
-      return NextResponse.json({ error: `storage upload failed: ${uploadError.message}` }, { status: 500 });
-    }
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from(BUCKET)
+          .upload(storagePath, buffer, {
+            contentType:
+              file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            upsert: false,
+          });
 
-    // 2) documents 테이블 저장
-    const { data: docInsert, error: docError } = await supabaseAdmin
-      .from("documents")
-      .insert({
-        filename: file.name,
-        content_type: file.type,
-        size_bytes: file.size,
-        storage_path: storagePath,
-      })
-      .select("id, filename")
-      .single();
+        if (uploadError) {
+          results.push({ filename: file.name, ok: false, error: `storage upload failed: ${uploadError.message}` });
+          continue;
+        }
 
-    if (docError || !docInsert?.id) {
-      return NextResponse.json({ error: `documents insert failed: ${docError?.message ?? "unknown"}` }, { status: 500 });
-    }
+        // 2) documents insert
+        const { data: docInsert, error: docError } = await supabaseAdmin
+          .from("documents")
+          .insert({
+            filename: file.name,
+            content_type: file.type,
+            size_bytes: file.size,
+            storage_path: storagePath,
+          })
+          .select("id, filename")
+          .single();
 
-    // ✅ 3) DOCX → HTML 변환 (표 보존)
-    const { value: html } = await mammoth.convertToHtml(
-      { buffer },
-      {
-        // 필요하면 스타일 맵을 추가로 줄 수 있음. 기본으로도 표는 <table>로 잘 나옵니다.
-        // styleMap: [],
+        if (docError || !docInsert?.id) {
+          // storage 업로드는 됐는데 documents 실패 → storage 롤백 시도
+          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+          results.push({ filename: file.name, ok: false, error: `documents insert failed: ${docError?.message ?? "unknown"}` });
+          continue;
+        }
+
+        // 3) DOCX → HTML (표 보존)
+        const { value: html } = await mammoth.convertToHtml({ buffer });
+
+        // 4) HTML → text (표는 MD)
+        const text = htmlToTextKeepingTables(html);
+        if (!text) {
+          // documents까지 만들어졌으면 정리(롤백)
+          await supabaseAdmin.from("document_chunks").delete().eq("document_id", docInsert.id).catch(() => {});
+          await supabaseAdmin.from("documents").delete().eq("id", docInsert.id).catch(() => {});
+          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+          results.push({ filename: file.name, ok: false, error: "문서에서 텍스트를 추출하지 못했습니다." });
+          continue;
+        }
+
+        // 5) chunk insert
+        const chunks = chunkTextSmart(text, 1200);
+        const rows = chunks.map((content, idx) => ({
+          document_id: docInsert.id,
+          chunk_index: idx,
+          content,
+        }));
+
+        const { error: chunkError } = await supabaseAdmin.from("document_chunks").insert(rows);
+
+        if (chunkError) {
+          // 실패 시 정리(롤백)
+          await supabaseAdmin.from("document_chunks").delete().eq("document_id", docInsert.id).catch(() => {});
+          await supabaseAdmin.from("documents").delete().eq("id", docInsert.id).catch(() => {});
+          await supabaseAdmin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+          results.push({ filename: file.name, ok: false, error: `chunk insert failed: ${chunkError.message}` });
+          continue;
+        }
+
+        results.push({
+          filename: file.name,
+          ok: true,
+          document_id: docInsert.id,
+          chunks: rows.length,
+        });
+      } catch (e: any) {
+        results.push({ filename: file.name, ok: false, error: e?.message ?? "업로드 중 오류" });
       }
-    );
-
-    // ✅ 4) HTML → (표는 Markdown) + 본문 텍스트 생성
-    const text = htmlToTextKeepingTables(html);
-
-    if (!text) {
-      return NextResponse.json({ error: "문서에서 텍스트를 추출하지 못했습니다." }, { status: 500 });
     }
 
-    // ✅ 5) chunk 분리 → document_chunks 저장
-    const chunks = chunkTextSmart(text, 1200);
-
-    const rows = chunks.map((content, idx) => ({
-      document_id: docInsert.id,
-      chunk_index: idx,
-      content,
-    }));
-
-    const { error: chunkError } = await supabaseAdmin.from("document_chunks").insert(rows);
-
-    if (chunkError) {
-      return NextResponse.json({ error: `chunk insert failed: ${chunkError.message}` }, { status: 500 });
-    }
+    const success = results.filter((r) => r.ok).length;
+    const fail = results.length - success;
 
     return NextResponse.json({
-      ok: true,
-      filename: docInsert.filename,
-      chunks: rows.length,
+      ok: fail === 0,
+      summary: { total: results.length, success, fail },
+      results,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? "업로드 중 오류 발생" }, { status: 500 });
