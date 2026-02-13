@@ -109,19 +109,26 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
  * - 표 아래 다른 섹션(기타/유의사항/신청방법 등)이 표 안으로 섞이지 않게 컷팅
  */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
-  const rawLines = text
+  const rawLines = (text ?? "")
     .split("\n")
     .map((l) => l.replace(/\r/g, "").trim())
     .filter((l) => l.length > 0);
 
-  if (rawLines.length < 10) return { rebuilt: text.trim(), hasTable: false };
+  if (rawLines.length < 10) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 
-  // 표 헤더 후보
+  // ✅ 표 헤더 후보 (여기에 "기타 휴가" 표 헤더 추가)
   const headerCandidates: { headers: string[]; firstColAllow?: Set<string> }[] = [
     {
       headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
       firstColAllow: new Set(["경사", "조의"]),
     },
+
+    // ✅ 기타 휴가 표 (구분/유형/내용/휴가일수/첨부서류/비고)
+    {
+      headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"],
+      firstColAllow: new Set(["기타"]),
+    },
+
     { headers: ["구분", "내용"] },
     { headers: ["항목", "지원대상", "신청 기준일"] },
     { headers: ["항목", "지원 대상", "신청 기준일"] },
@@ -159,6 +166,9 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     "필수 확인 사항",
     "포상 제외 대상",
     "포상 기준",
+    // ✅ 다음 섹션 마커도 컷 신호로 추가
+    "✅",
+    "📌",
   ]);
 
   for (const cand of headerCandidates) {
@@ -174,7 +184,8 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     // row 계산 범위 컷
     let cutForRowCalc = after.length;
     for (let i = 0; i < after.length; i++) {
-      if (sectionStarts.has(after[i])) {
+      // ✅ 섹션 시작 단어/마커로 컷
+      if (sectionStarts.has(after[i]) || after[i].startsWith("✅") || after[i].startsWith("📌")) {
         cutForRowCalc = i;
         break;
       }
@@ -198,7 +209,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
       rows.push(row);
     }
 
-    // ✅ 경조휴가 표 같은 경우: 첫 컬럼 값이 경사/조의가 아니면 그 이후는 표가 아닌 꼬리로 판단(깨짐 방지)
+    // ✅ 첫 컬럼 검증(경조: 경사/조의, 기타휴가: 기타 등) -> 표 깨짐 방지
     let rowsCut = rows.length;
     if (cand.firstColAllow) {
       for (let i = 0; i < rows.length; i++) {
@@ -231,18 +242,23 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const outParts: string[] = [];
     if (before) outParts.push(before);
 
-    // ✅ 표는 반드시 codeblock으로 감싸서 UI에서 안 깨지게
+    // 표는 codeblock으로 감싸서 UI에서 안 깨지게
     outParts.push("```text\n" + md.join("\n") + "\n```");
 
-    // 표 아래 설명 유지(표 밖으로)
+    // ✅ 핵심: 표 아래쪽(tail/extraTail)에 또 다른 표가 있으면 “재귀로” 한 번 더 복원
     const mergedTail = [tail, extraTail].filter(Boolean).join("\n").trim();
-    if (mergedTail) outParts.push(mergedTail);
+    if (mergedTail) {
+      const again = rebuildFlatTableWithContext(mergedTail);
+      outParts.push(again.rebuilt);
+      return { rebuilt: outParts.join("\n\n").trim(), hasTable: true };
+    }
 
     return { rebuilt: outParts.join("\n\n").trim(), hasTable: true };
   }
 
-  return { rebuilt: text.trim(), hasTable: false };
+  return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 }
+
 
 /** 표(마크다운 |...|)가 있으면 codeblock으로 감싸기 */
 function wrapAnyMarkdownTableAsCodeblock(text: string): string {
