@@ -197,7 +197,7 @@ export default function AdminUsersPage() {
               </div>
             </div>
 
-         <AdminNav current="users" />
+        <AdminNav showDocs={false} />
           </div>
 
           <div style={{ display: "grid", gap: 14 }}>
