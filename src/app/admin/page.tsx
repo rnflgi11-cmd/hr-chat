@@ -21,6 +21,13 @@ export default function AdminPage() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // ✅ 체크박스 선택 상태
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const selectedIds = useMemo(
+    () => Object.entries(selected).filter(([, v]) => v).map(([id]) => id),
+    [selected]
+  );
+
   useEffect(() => {
     if (!user) {
       window.location.href = "/";
@@ -37,11 +44,22 @@ export default function AdminPage() {
   async function refresh() {
     const res = await fetch("/api/admin/docs");
     const json = await res.json();
-    setDocs(json.docs ?? []);
+    const nextDocs: Doc[] = json.docs ?? [];
+    setDocs(nextDocs);
+
+    // ✅ 문서 목록 갱신 시, 존재하지 않는 id 선택 제거
+    setSelected((prev) => {
+      const idSet = new Set(nextDocs.map((d) => d.id));
+      const next: Record<string, boolean> = {};
+      for (const [id, v] of Object.entries(prev)) {
+        if (v && idSet.has(id)) next[id] = true;
+      }
+      return next;
+    });
   }
 
   async function upload() {
-    if (!files) {
+    if (!files || files.length === 0) {
       setMsg("파일을 선택해 주세요.");
       return;
     }
@@ -86,7 +104,62 @@ export default function AdminPage() {
         setMsg(json.error ?? "삭제 실패");
         return;
       }
+
+      // ✅ 선택 상태에서도 제거
+      setSelected((prev) => {
+        const next = { ...prev };
+        delete next[docId];
+        return next;
+      });
+
       setMsg("삭제 완료!");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ✅ 전체 선택/해제(현재 필터 결과 기준)
+  function selectAll(list: Doc[]) {
+    setSelected((prev) => {
+      const next = { ...prev };
+      list.forEach((d) => (next[d.id] = true));
+      return next;
+    });
+  }
+
+  function clearAll(list: Doc[]) {
+    setSelected((prev) => {
+      const next = { ...prev };
+      list.forEach((d) => delete next[d.id]);
+      return next;
+    });
+  }
+
+  // ✅ 선택 일괄 삭제
+  async function removeSelected(ids: string[]) {
+    if (ids.length === 0) return;
+    if (!confirm(`선택한 ${ids.length}개 문서를 삭제할까요?\n(스토리지 + DB(chunks 포함)에서 삭제)`)) return;
+
+    setBusy(true);
+    setMsg("선택 문서 삭제 중...");
+
+    try {
+      const res = await fetch("/api/admin/delete", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, user }),
+      });
+      const json = await res.json();
+
+      if (!res.ok) {
+        setMsg(json.error ?? "삭제 실패");
+        return;
+      }
+
+      const extra = json.storage_error ? ` (storage 일부 실패: ${json.storage_error})` : "";
+      setMsg(`삭제 완료! 문서 ${json.deleted_documents ?? ids.length}건${extra}`);
+      setSelected({});
       await refresh();
     } finally {
       setBusy(false);
@@ -189,12 +262,12 @@ export default function AdminPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
             <input
-  type="file"
-  multiple
-  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-  disabled={busy}
-/>
+              type="file"
+              multiple
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              disabled={busy}
+            />
             <button onClick={upload} disabled={busy} style={primaryBtn}>
               {busy ? "처리 중..." : "업로드"}
             </button>
@@ -227,13 +300,25 @@ export default function AdminPage() {
             </div>
 
             <div style={{ width: 320, maxWidth: "100%" }}>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="파일명 검색…"
-                style={input}
-              />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="파일명 검색…" style={input} />
             </div>
+          </div>
+
+          {/* ✅ 체크박스/일괄삭제 컨트롤 */}
+          <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={() => selectAll(filtered)} disabled={busy || filtered.length === 0} style={btn}>
+              전체 선택(검색결과)
+            </button>
+            <button onClick={() => clearAll(filtered)} disabled={busy || filtered.length === 0} style={btn}>
+              선택 해제(검색결과)
+            </button>
+            <button
+              onClick={() => removeSelected(selectedIds)}
+              disabled={busy || selectedIds.length === 0}
+              style={dangerBtn}
+            >
+              선택 삭제 ({selectedIds.length})
+            </button>
           </div>
 
           <div style={{ marginTop: 12, borderTop: "1px solid #f1f5f9" }} />
@@ -249,11 +334,21 @@ export default function AdminPage() {
                     padding: "12px 4px",
                     borderBottom: "1px solid #f3f4f6",
                     display: "grid",
-                    gridTemplateColumns: "1fr auto",
+                    gridTemplateColumns: "28px 1fr auto",
                     gap: 10,
                     alignItems: "start",
                   }}
                 >
+                  {/* ✅ 체크박스 */}
+                  <div style={{ paddingTop: 2 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!selected[d.id]}
+                      onChange={(e) => setSelected((prev) => ({ ...prev, [d.id]: e.target.checked }))}
+                      disabled={busy}
+                    />
+                  </div>
+
                   <div>
                     <div style={{ fontWeight: 900 }}>
                       {d.filename}
