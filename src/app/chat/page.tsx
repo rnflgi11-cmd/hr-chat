@@ -264,10 +264,15 @@ export default function ChatPage() {
               </div>
 
               {user.role === "admin" && (
-                <a href="/admin" style={btn}>
-                  관리자
-                </a>
-              )}
+  <>
+    <a href="/admin" style={btn}>
+      문서관리
+    </a>
+    <a href="/admin/users" style={btn}>
+      사용자관리
+    </a>
+  </>
+)}
 
               <button onClick={logout} style={btn}>
                 로그아웃
