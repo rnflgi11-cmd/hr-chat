@@ -118,27 +118,24 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
   if (raw.length < 8) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 
-  type Cand = { headers: string[]; firstColAllow?: Set<string>; kind?: "default" | "leave6" };
+  type Cand = { headers: string[]; kind?: "default" | "leave6"; firstColAllow?: Set<string> };
 
   const cands: Cand[] = [
     // 경조휴가 표
     {
       headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
-      firstColAllow: new Set(["경사", "조의"]),
       kind: "default",
+      firstColAllow: new Set(["경사", "조의"]),
     },
 
-    // ✅ 기타휴가(공가 포함) 표: 구분/유형/내용/휴가일수/첨부서류/비고
-    // (DOCX에서 구분 칸이 다음 행부터 비는 경우가 많아서 전용 파서 사용)
+    // ✅ 기타휴가(공가 포함) 표
     {
       headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"],
       kind: "leave6",
     },
 
-    // 간단 표
+    // 기타 후보들
     { headers: ["구분", "내용"], kind: "default" },
-
-    // 기타 후보
     { headers: ["항목", "지원대상", "신청 기준일"], kind: "default" },
     { headers: ["항목", "지원 대상", "신청 기준일"], kind: "default" },
     { headers: ["구분", "기준", "포상 금액"], kind: "default" },
@@ -147,7 +144,6 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
   ];
 
   const sectionStarts = new Set([
-    "기타",
     "참고사항",
     "유의사항",
     "신청방법",
@@ -182,16 +178,17 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
   }
 
   // ✅ 기본 파서(단순 cols 묶기)
-  function parseDefault(cells: string[], cols: number, cand: Cand): string[][] {
-    // remainder는 무조건 패딩해서 살림
+  function rowsFromCellsDefault(cells: string[], cols: number, cand: Cand): string[][] {
+    // remainder는 무조건 살림
     if (cells.length % cols !== 0) {
       while (cells.length % cols !== 0) cells.push("");
     }
+
     const rowCount = Math.floor(cells.length / cols);
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) rows.push(cells.slice(r * cols, r * cols + cols));
 
-    // firstColAllow 검증(표 깨짐 방지)
+    // firstColAllow 검증(경조 표만)
     if (cand.firstColAllow) {
       let cut = rows.length;
       for (let r = 0; r < rows.length; r++) {
@@ -203,14 +200,15 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
       }
       return rows.slice(0, cut);
     }
+
     return rows;
   }
 
-  // ✅ “기타휴가 표(6컬럼)” 전용 파서:
-  // - 구분(기타/공가/경사/조의)이 다음 행에서 비어서 셀들이 왼쪽으로 땡겨지는 문제를 복구
-  function parseLeave6(cells: string[], cols: number): string[][] {
+  // ✅ 기타휴가(6컬럼) 전용 파서
+  // - 구분 칼럼(기타)이 반복되고, 어떤 추출기에서는 빈칸 셀이 날아가서 왼쪽으로 땡겨지는 걸 복구
+  function rowsFromCellsLeave6(cells: string[], cols: number): string[][] {
     const firstSet = new Set(["기타", "공가", "경사", "조의"]);
-    let prevFirst = ""; // 직전 행의 구분
+    let prevFirst = "";
     let row: string[] = [];
     const rows: string[][] = [];
 
@@ -222,33 +220,33 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     };
 
     for (const cell of cells) {
-      // 섹션 마커가 셀로 들어온 경우(드물게)도 막기
-      if (!cell) continue;
+      const v = (cell ?? "").trim();
+      if (!v) continue;
 
-      // 구분 단어가 나오면 새 행 시작 신호로 강하게 취급
-      if (firstSet.has(cell)) {
+      // 첫 컬럼 후보가 나오면 새 행 시작
+      if (firstSet.has(v)) {
         if (row.length > 0) pushRow(row);
-        row = [cell];
+        row = [v];
         continue;
       }
 
-      // 새 행인데 구분이 안 나오면, 이전 구분을 carry 해서 채워 넣기
+      // 새 행인데 첫 컬럼이 안 나오면 이전 첫 컬럼을 carry
       if (row.length === 0) {
-        row = prevFirst ? [prevFirst, cell] : [cell];
+        row = prevFirst ? [prevFirst, v] : [v];
       } else {
-        row.push(cell);
+        row.push(v);
       }
 
-      // cols에 도달하면 행 확정
+      // cols 도달 시 행 확정
       if (row.length >= cols) {
         pushRow(row.slice(0, cols));
-        row = row.slice(cols); // 혹시 overflow 있으면 다음 행로
+        row = row.slice(cols);
       }
     }
 
     if (row.length > 0) pushRow(row);
 
-    // 너무 짧은 행(실제로 표가 아닌 꼬리) 제거: 2칸 이하 행은 버림
+    // 너무 짧은 행(꼬리) 제거
     return rows.filter((r) => r.filter((x) => (x ?? "").trim()).length >= 3);
   }
 
@@ -256,19 +254,20 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const headers = cand.headers;
     const cols = headers.length;
 
-    let i = from + cols;
+    let i = from + cols; // 헤더 다음부터
     const cells: string[] = [];
 
     while (i < raw.length) {
       const line = raw[i];
 
+      // 다음 표 헤더 만나면 stop
       if (matchHeaderAt(i)) break;
 
-      // 섹션/마커면 stop (단, leave6 표에서는 "기타"가 구분일 수 있으니 여기서는 끊지 않음)
+      // ✅ 마커(✅/📌)면 stop
       if (startsWithMarker(line)) break;
 
-      // leave6 표에서는 "기타"를 포함한 섹션 키워드가 셀로 올 수 있으므로,
-      // 섹션 키워드로 끊는 것은 "default"에서만 강하게 적용
+      // ✅ default 표에서만 섹션 키워드로 stop
+      // leave6(기타휴가)은 “기타”가 표 셀이라 섹션 컷을 약하게
       if (cand.kind !== "leave6" && sectionStarts.has(line)) break;
 
       cells.push(line);
@@ -277,12 +276,10 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
     if (cells.length < cols) return { md: "", consumedUntil: from + 1, hasTable: false };
 
-    let rows: string[][] = [];
-    if (cand.kind === "leave6" && cols === 6 && headers[1] === "유형") {
-      rows = parseLeave6([...cells], cols);
-    } else {
-      rows = parseDefault([...cells], cols, cand);
-    }
+    const rows =
+      cand.kind === "leave6" && cols === 6 && headers[1] === "유형"
+        ? rowsFromCellsLeave6([...cells], cols)
+        : rowsFromCellsDefault([...cells], cols, cand);
 
     if (!rows.length) return { md: "", consumedUntil: from + 1, hasTable: false };
 
@@ -293,8 +290,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
       mdLines.push(`| ${r.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    // ✅ consumedUntil은 우리가 cells로 가져간 만큼(표 영역 전체) 소비
-    // (이렇게 해야 표 뒤 텍스트가 누락되지 않음)
+    // ✅ 핵심: “표로 읽어들인 영역 끝(i)”까지 통째로 소비해야 아래가 안 잘림
     const consumedUntil = i;
 
     return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil, hasTable: true };
@@ -326,6 +322,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
 
   return { rebuilt: out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), hasTable: foundAny };
 }
+
 
 /** 표(마크다운 |...|)가 있으면 codeblock으로 감싸기 */
 function wrapAnyMarkdownTableAsCodeblock(text: string): string {
