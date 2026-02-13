@@ -33,9 +33,24 @@ function classifyIntent(q: string): "A" | "B" | "C" {
   const A = ["연차", "반차", "시간연차", "이월", "차감", "연차 발생", "연차 부여", "연차 신청"];
   const B = ["잔여연차", "연차수당", "연차비", "미사용 연차", "정산", "지급", "수당"];
   const C = [
-    "경조", "결혼", "조위", "출산", "배우자", "공가", "민방위", "예비군", "건강검진",
-    "가족돌봄", "특별휴가", "화환", "복리후생", "증명서", "재직", "프로젝트",
-    "휴일근무", "평일심야",
+    "경조",
+    "결혼",
+    "조위",
+    "출산",
+    "배우자",
+    "공가",
+    "민방위",
+    "예비군",
+    "건강검진",
+    "가족돌봄",
+    "특별휴가",
+    "화환",
+    "복리후생",
+    "증명서",
+    "재직",
+    "프로젝트",
+    "휴일근무",
+    "평일심야",
   ];
 
   if (B.some((k) => s.includes(k))) return "B";
@@ -73,7 +88,8 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
   if (intent === "A") return "연차";
   if (intent === "B") return "연차";
   if (s.includes("화환")) return "화환";
-  if (s.includes("경조") || s.includes("결혼") || s.includes("조위") || s.includes("부고") || s.includes("장례")) return "경조";
+  if (s.includes("경조") || s.includes("결혼") || s.includes("조위") || s.includes("부고") || s.includes("장례"))
+    return "경조";
   if (s.includes("출산") || s.includes("배우자")) return "휴가";
   if (s.includes("민방위") || s.includes("예비군")) return "휴가";
   if (s.includes("복리후생") || s.includes("건강검진")) return "복리후생";
@@ -81,7 +97,7 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
   return null;
 }
 
-/** ✅ 표 복원기 개선 버전 */
+/** (구 문서 대응용) 플랫 텍스트 표 복원기 - 이미 업로드가 표를 MD로 저장하면 거의 안 씀 */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
     .split("\n")
@@ -102,7 +118,6 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     { headers: ["구분", "내용"], kind: "default" },
   ];
 
-  const sectionStarts = new Set(["참고사항", "유의사항", "신청방법", "지급일", "사용절차", "✅", "📌"]);
   const isDivider = (s: string) => /^[─-]{5,}$/.test(s.replace(/\s+/g, ""));
 
   function matchHeaderAt(i: number): Cand | null {
@@ -156,23 +171,10 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const cells: string[] = [];
 
     while (i < raw.length) {
-  const line = raw[i];
-
-  // 다음 표 헤더 만나면 stop
-  if (matchHeaderAt(i)) break;
-
-  // 마커면 stop
-  if (line.startsWith("✅") || line.startsWith("📌")) break;
-
-  // 구분선(────)이면 stop
-  if (/^[─-]{5,}$/.test(line.replace(/\s+/g, ""))) break;
-
-  // "섹션 제목"이면 stop (표 다음에 자주 등장)
-  if (sectionStarts.has(line)) break;
-
-  cells.push(line);
-  i++;
-}
+      if (matchHeaderAt(i) || raw[i].startsWith("✅") || raw[i].startsWith("📌")) break;
+      cells.push(raw[i]);
+      i++;
+    }
 
     let rows: string[][] = [];
     if (cand.kind === "leaveStructured") {
@@ -191,7 +193,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const mdLines = [
       `| ${cand.headers.join(" | ")} |`,
       `| ${cand.headers.map(() => "---").join(" | ")} |`,
-      ...rows.map(r => `| ${r.map(c => c.replace(/\|/g, "｜").replace(/\n/g, " ")).join(" | ")} |`)
+      ...rows.map((r) => `| ${r.map((c) => c.replace(/\|/g, "｜").replace(/\n/g, " ")).join(" | ")} |`),
     ];
 
     return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil: i, hasTable: true };
@@ -222,48 +224,22 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
   return { rebuilt: out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), hasTable: foundAny };
 }
 
-/** 기타 유틸리티 함수 */
 function cleanText(t: string) {
-  return (t ?? "").toString()
+  return (t ?? "")
+    .toString()
     .replace(/\[BUILD_MARK_[^\]]+\]/g, "")
     .replace(/분류[\s\S]*?의도\s*[ABC]\s*/g, "")
     .replace(/^\[[^\]]+\/\s*조각\s*\d+\]$/gm, "")
-    .replace(/\n{3,}/g, "\n\n").trim();
-}
-
-
-function hasMarkdownTableBlock(s: string) {
-  const t = (s ?? "").toString();
-
-  // 1) 코드블록 안에 | --- | 같은 md table이 이미 있으면 (업로드 단계에서 만든 것)
-  const hasFencedTable =
-    /```(?:text|md|markdown)?[\s\S]*?\n\|[^\n]*\|[\s\S]*?\n\|(?:\s*:?-+:?\s*\|)+[\s\S]*?```/i.test(t);
-
-  // 2) 코드블록 없어도 md table 패턴이 있으면
-  const hasInlineTable =
-    /\n\|[^\n]*\|\n\|(?:\s*:?-+:?\s*\|)+/i.test(t);
-
-  return hasFencedTable || hasInlineTable;
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function formatChunkContent(content: string): { text: string; hasTable: boolean } {
-  const raw = (content ?? "").toString().trim();
-  if (!raw) return { text: "", hasTable: false };
-
-  // ✅ 이미 표가 만들어져 있으면 복원기(휴리스틱) 건드리지 말고 그대로 출력
-  if (hasMarkdownTableBlock(raw)) {
-    return { text: raw, hasTable: true };
-  }
-
-  // ✅ 표가 없는(옛날 인덱싱) 청크만 복원 시도
-  const rebuilt = rebuildFlatTableWithContext(raw);
-  return { text: rebuilt.rebuilt.trim(), hasTable: rebuilt.hasTable };
-}
-
-
-function tokenHitRate(tokens: string[], content: string) {
-  const lower = (content ?? "").toLowerCase();
-  return tokens.filter((k) => lower.includes(k.toLowerCase())).length / Math.max(1, tokens.length);
+  // 신규 업로드(cheerio 방식)는 이미 표가 ```text ...``` 형태로 들어있음.
+  // 구 문서 대비용으로만 복원기 한 번 태움(표 있으면 hasTable true로 잡힘)
+  const rebuilt = rebuildFlatTableWithContext(content);
+  const hasTable = rebuilt.hasTable || /```text[\s\S]*\|[\s\S]*```/m.test(content ?? "");
+  return { text: (rebuilt.rebuilt || content || "").trim(), hasTable };
 }
 
 function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
@@ -272,13 +248,13 @@ function buildAnswer(intent: "A" | "B" | "C", finalHits: Hit[]) {
     return { ...h, formatted: f.text, hasTable: f.hasTable };
   });
 
-
-  formatted.sort((a, b) => Number(b.hasTable) - Number(a.hasTable));
+  // ✅ 핵심: 무조건 본문(조각) 순서대로 출력
+  formatted.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0));
 
   let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
   body = cleanText(body);
 
-  const sourceLines = Array.from(new Set(formatted.map(h => `- ${h.filename} / 조각 ${h.chunk_index}`))).join("\n");
+  const sourceLines = Array.from(new Set(formatted.map((h) => `- ${h.filename} / 조각 ${h.chunk_index}`))).join("\n");
   return { answer: body + `\n\n[출처]\n${sourceLines}`, citations: formatted };
 }
 
@@ -293,30 +269,100 @@ export async function POST(req: Request) {
     const tokens = extractTokens(question);
     const fileHint = pickFileHint(question, intent);
 
-
-    let { data: hits, error } = await supabaseAdmin.rpc("search_chunks_text_v3", {
-      q: question, tokens, file_hint: fileHint, match_count: 40, min_sim: 0.12,
+    // 1) 1차 검색
+    let { data: hits } = await supabaseAdmin.rpc("search_chunks_text_v3", {
+      q: question,
+      tokens,
+      file_hint: fileHint,
+      match_count: 40,
+      min_sim: 0.12,
     });
+
     if (!hits?.length) {
       const retry = await supabaseAdmin.rpc("search_chunks_text_v3", {
-        q: question, tokens, file_hint: null, match_count: 40, min_sim: 0.12,
+        q: question,
+        tokens,
+        file_hint: null,
+        match_count: 40,
+        min_sim: 0.12,
       });
       hits = retry.data;
     }
+
     if (!hits?.length) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
+    // 2) 상위 문서로 풀 확장(같은 문서 안에서 더 찾기)
     const bestDocId = hits[0].document_id;
     const { data: pool } = await supabaseAdmin.rpc("search_chunks_in_document", {
-      doc_id: bestDocId, q: question, tokens, match_count: 40, min_sim: 0.08,
+      doc_id: bestDocId,
+      q: question,
+      tokens,
+      match_count: 40,
+      min_sim: 0.08,
     });
 
+    const scored = (pool || hits)
+      .map((h: any) => ({
+        ...h,
+        score:
+          // 토큰 포함률 가중
+          tokens.filter((k) => (h.content ?? "").toLowerCase().includes(k.toLowerCase())).length /
+            Math.max(1, tokens.length) *
+            10 +
+          (h.sim || 0) * 2,
+      }))
+      .sort((a: any, b: any) => b.score - a.score);
 
-    const scored = (pool || hits).map((h: any) => ({
-      ...h,
-      score: tokenHitRate(tokens, h.content) * 10 + (h.sim || 0) * 2
-    })).sort((a: any, b: any) => b.score - a.score);
+    const anchor = scored[0];
+    if (!anchor?.document_id) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
-    const finalHits = scored.slice(0, 10);
+    // ✅ B안(정답): “가장 관련 높은 조각(anchor)” 기준으로 앞뒤 조각을 DB에서 직접 가져와서 본문 순서 유지
+    const anchorIdx = Number(anchor.chunk_index ?? 0);
+    const WINDOW = 2; // 앞뒤 2개씩(=총 5개). 필요하면 3으로 올리면 됨.
+    const fromIdx = Math.max(0, anchorIdx - WINDOW);
+    const toIdx = anchorIdx + WINDOW;
+
+    // filename 확보
+    const { data: docMeta } = await supabaseAdmin
+      .from("documents")
+      .select("id, filename")
+      .eq("id", anchor.document_id)
+      .maybeSingle();
+
+    const filename = docMeta?.filename ?? "(unknown)";
+
+    // 앞뒤 chunk를 실제 테이블에서 연속 범위로 가져오기
+    const { data: windowChunks, error: wErr } = await supabaseAdmin
+      .from("document_chunks")
+      .select("document_id, chunk_index, content")
+      .eq("document_id", anchor.document_id)
+      .gte("chunk_index", fromIdx)
+      .lte("chunk_index", toIdx)
+      .order("chunk_index", { ascending: true });
+
+    // 혹시 범위 조회가 실패하면(권한/컬럼 문제 등) scored 상위 10개를 본문순으로 fallback
+    let finalHits: Hit[] = [];
+    if (!wErr && windowChunks?.length) {
+      finalHits = (windowChunks as any[]).map((c) => ({
+        document_id: c.document_id,
+        filename,
+        chunk_index: c.chunk_index,
+        content: c.content,
+      }));
+    } else {
+      // fallback: scored 상위 10개를 chunk_index 순으로
+      finalHits = scored
+        .slice(0, 10)
+        .map((h: any) => ({
+          document_id: h.document_id,
+          filename: h.filename ?? filename,
+          chunk_index: h.chunk_index,
+          content: h.content,
+          sim: h.sim,
+        }))
+        .sort((a: Hit, b: Hit) => a.chunk_index - b.chunk_index);
+    }
+
     const { answer, citations } = buildAnswer(intent, finalHits);
     return NextResponse.json({ intent, answer, citations });
   } catch (e: any) {
