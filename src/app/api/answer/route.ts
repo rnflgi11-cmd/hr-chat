@@ -69,9 +69,28 @@ function uniq<T>(arr: T[]) {
 }
 
 /** -----------------------------
- * Intent (핵심 수정)
- *  - B(연차수당/정산)를 A(연차휴가)보다 먼저 잡는다
- *  - 단, "프로젝트/휴일근무/심야" 등은 C로 우선 분기
+ * Topic detection (추가)
+ *  - "돈 질문"을 강하게 잡아 검색/출력 제어
+ * ---------------------------- */
+function detectMoneyTopic(q: string) {
+  const sl = safeLower(q);
+
+  const isAnnualAllowance =
+    sl.includes("연차") &&
+    (sl.includes("수당") || sl.includes("정산") || sl.includes("지급") || sl.includes("얼마") || sl.includes("계산"));
+
+  const isCondolenceMoney =
+    sl.includes("경조금") ||
+    sl.includes("부의금") ||
+    sl.includes("축의금") ||
+    sl.includes("조의금") ||
+    (sl.includes("경조") && (sl.includes("금") || sl.includes("얼마") || sl.includes("지급") || sl.includes("금액")));
+
+  return { isAnnualAllowance, isCondolenceMoney };
+}
+
+/** -----------------------------
+ * Intent
  * ---------------------------- */
 function classifyIntent(q: string): Intent {
   const s = normalize(q);
@@ -134,45 +153,57 @@ function extractTokens(q: string): string[] {
 
   const force: string[] = [];
   const sl = safeLower(q);
+  const { isAnnualAllowance, isCondolenceMoney } = detectMoneyTopic(q);
 
   if (sl.includes("화환")) force.push("화환", "신청", "절차");
-  if (sl.includes("경조")) force.push("경조", "휴가", "경조휴가");
-  if (sl.includes("결혼")) force.push("결혼", "경조휴가");
-  if (sl.includes("조위") || sl.includes("부고") || sl.includes("장례")) force.push("조위", "경조");
-  if (sl.includes("출산")) force.push("출산", "휴가");
-  if (sl.includes("배우자")) force.push("배우자", "출산", "휴가");
+
+  // ✅ 경조/조위/장례
+  if (sl.includes("경조")) force.push("경조");
+  if (sl.includes("조위") || sl.includes("부고") || sl.includes("장례")) force.push("조위", "부고", "장례");
+  if (sl.includes("결혼")) force.push("결혼");
+  if (sl.includes("출산")) force.push("출산");
+  if (sl.includes("배우자")) force.push("배우자", "출산");
+
+  // ✅ "할머니/조부모" 같은 표현이 휴가(조부모)로 엮이게 토큰 강화
+  if (sl.includes("할머니") || sl.includes("외할머니") || sl.includes("조부모") || sl.includes("외조부모")) {
+    force.push("조부모", "외조부모", "조사", "조의");
+  }
+
   if (sl.includes("민방위") || sl.includes("예비군")) force.push("민방위", "예비군", "공가", "휴가");
 
-  // ✅ 프로젝트 수당: "연차수당" 쪽으로 빨리지 않도록 "프로젝트"를 강하게 넣고, "연차"는 넣지 않음
+  // ✅ 프로젝트 수당
   if (sl.includes("프로젝트")) force.push("프로젝트", "프로젝트수당", "수당", "기준", "대상", "신청", "지급");
 
   if (sl.includes("휴일근무")) force.push("휴일근무", "수당", "신청", "지급");
   if (sl.includes("평일") && sl.includes("심야")) force.push("평일", "심야", "근무", "신청");
 
-  // ✅ 연차 수당/정산 질문이면 수당 관련 토큰을 강제로 넣어 검색을 유도
-  const isAnnualAllowance =
-    sl.includes("연차") &&
-    (sl.includes("수당") || sl.includes("정산") || sl.includes("지급") || sl.includes("얼마") || sl.includes("계산"));
-
+  // ✅ 연차수당/정산 질문이면 강제 토큰
   if (isAnnualAllowance) {
     force.push("연차수당", "연차비", "미사용", "정산", "지급", "기준", "계산");
+  }
+
+  // ✅ 경조금(돈) 질문이면 강제 토큰
+  if (isCondolenceMoney) {
+    force.push("경조금", "금액", "지급", "기준", "대상", "부의", "축의", "조의금");
   }
 
   return uniq([...force, ...base]).slice(0, MAX_TOKENS);
 }
 
 /** -----------------------------
- * File hint (핵심 수정)
- *  - B는 "연차수당" 힌트를 주어 휴가규정(운영)로만 빨려가지 않게 함
+ * File hint
+ *  - 돈 질문은 더 정확한 힌트로 문서 선택 유도
  * ---------------------------- */
 function pickFileHint(q: string, intent: Intent): string | null {
   const sl = safeLower(q);
+  const { isAnnualAllowance, isCondolenceMoney } = detectMoneyTopic(q);
 
   if (sl.includes("프로젝트")) return "프로젝트";
   if (sl.includes("휴일근무") || (sl.includes("평일") && sl.includes("심야"))) return "근무";
 
-  // ✅ intent 분기
-  if (intent === "B") return "연차수당";
+  // ✅ 돈 질문 우선
+  if (isCondolenceMoney) return "경조금";
+  if (isAnnualAllowance || intent === "B") return "연차수당";
   if (intent === "A") return "연차";
 
   if (sl.includes("화환")) return "화환";
@@ -187,7 +218,7 @@ function pickFileHint(q: string, intent: Intent): string | null {
 }
 
 /** -----------------------------
- * (구 문서 대응) 표 복원기 + 텍스트 클린
+ * 표 복원기 + 텍스트 클린 (그대로)
  * ---------------------------- */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
@@ -269,7 +300,6 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     const cells: string[] = [];
 
     while (i < raw.length) {
-      // 다음 표 헤더 or 마커 만나면 stop
       if (matchHeaderAt(i) || raw[i].startsWith("✅") || raw[i].startsWith("📌")) break;
       cells.push(raw[i]);
       i++;
@@ -352,12 +382,11 @@ function calcScore(h: RpcHit, tokens: string[]) {
 
   const sim = Number(h.sim ?? 0);
 
-  // 점수: 토큰포함률(강) + sim(약)
   return tokenRatio * 10 + sim * 2;
 }
 
 /** -----------------------------
- * Fetch window chunks (본문 순서 유지)
+ * Fetch window chunks
  * ---------------------------- */
 async function fetchDocumentMeta(supabaseAdmin: SupabaseClient, docId: string): Promise<DocumentMeta | null> {
   const { data } = await supabaseAdmin.from("documents").select("id, filename").eq("id", docId).maybeSingle();
@@ -390,6 +419,32 @@ async function fetchWindowChunks(
 }
 
 /** -----------------------------
+ * Final hit filtering (핵심 추가)
+ *  - 돈 질문인데 연차/휴가 본문이 딸려오는 걸 잘라냄
+ * ---------------------------- */
+function filterFinalHits(question: string, hits: Hit[]) {
+  const sl = safeLower(question);
+  const { isAnnualAllowance, isCondolenceMoney } = detectMoneyTopic(question);
+
+  if (isAnnualAllowance) {
+    // 연차수당 질문이면 "연차수당/정산/미사용/연차비/지급" 근처만 남김
+    const keep = ["연차수당", "연차비", "미사용", "정산", "지급", "계산", "기준"];
+    const filtered = hits.filter((h) => keep.some((k) => safeLower(h.content).includes(safeLower(k))));
+    return filtered.length ? filtered : hits;
+  }
+
+  if (isCondolenceMoney) {
+    // 경조금 질문이면 "경조금/금액/지급/기준/대상"이 있는 조각만 남김
+    const keep = ["경조금", "금액", "지급", "기준", "대상", "부의", "축의", "조의금"];
+    const filtered = hits.filter((h) => keep.some((k) => safeLower(h.content).includes(safeLower(k))));
+    return filtered.length ? filtered : hits;
+  }
+
+  // 일반 질문은 그대로
+  return hits;
+}
+
+/** -----------------------------
  * Build answer
  * ---------------------------- */
 function buildAnswer(intent: Intent, finalHits: Hit[]) {
@@ -398,7 +453,6 @@ function buildAnswer(intent: Intent, finalHits: Hit[]) {
     return { ...h, formatted: f.text, hasTable: f.hasTable };
   });
 
-  // ✅ 본문 순서 유지
   formatted.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0));
 
   let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
@@ -447,14 +501,14 @@ export async function POST(req: Request) {
 
     if (!hits?.length) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
-    // ✅ (핵심 수정) hits도 점수 매겨 bestDocId를 선정해 엉뚱한 문서로 고정되는 걸 줄임
+    // ✅ hits도 점수 매겨 bestDocId를 선정 (엉뚱한 문서 고정 방지)
     const hitsScored = hits
       .map((h) => ({ ...h, score: calcScore(h, tokens) }))
       .sort((a: any, b: any) => b.score - a.score);
 
-    // 2) best doc 기준 pool 확장
     const bestDocId = hitsScored[0].document_id;
 
+    // 2) best doc 기준 pool 확장
     const poolRes = await supabaseAdmin.rpc("search_chunks_in_document", {
       doc_id: bestDocId,
       q: question,
@@ -487,7 +541,6 @@ export async function POST(req: Request) {
     if (windowChunks?.length) {
       finalHits = windowChunks;
     } else {
-      // fallback: scored 상위 10개를 본문순으로
       finalHits = scored
         .slice(0, 10)
         .map((h: any) => ({
@@ -499,6 +552,9 @@ export async function POST(req: Request) {
         }))
         .sort((a, b) => a.chunk_index - b.chunk_index);
     }
+
+    // ✅ 핵심: 돈 질문이면 관련없는(연차 등) 조각을 잘라냄
+    finalHits = filterFinalHits(question, finalHits);
 
     const { answer, citations } = buildAnswer(intent, finalHits);
     return NextResponse.json({ intent, answer, citations });
