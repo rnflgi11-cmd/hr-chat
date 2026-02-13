@@ -69,15 +69,15 @@ function uniq<T>(arr: T[]) {
 }
 
 /** -----------------------------
- * Intent (리팩토링 핵심)
- *  - 기존 문제: B에 "수당/지급"이 있어서 "프로젝트 수당"도 B로 빨려감
- *  - 해결: "프로젝트/휴일근무/심야" 같은 키워드는 C로 우선 분기
+ * Intent (핵심 수정)
+ *  - B(연차수당/정산)를 A(연차휴가)보다 먼저 잡는다
+ *  - 단, "프로젝트/휴일근무/심야" 등은 C로 우선 분기
  * ---------------------------- */
 function classifyIntent(q: string): Intent {
   const s = normalize(q);
   const sl = safeLower(s);
 
-  // ✅ C-우선 키워드(수당이라는 단어가 있어도 여기로 보내야 함)
+  // ✅ C-우선 키워드(수당이 있어도 여기로 보내야 함)
   const C_PRIMARY = [
     "프로젝트",
     "휴일근무",
@@ -101,18 +101,23 @@ function classifyIntent(q: string): Intent {
     "증명서",
     "재직",
   ];
-
   if (C_PRIMARY.some((k) => sl.includes(k.toLowerCase()))) return "C";
 
-  // A: 연차휴가
+  // ✅ B 먼저: "연차"가 있어도 수당/정산이면 B가 이김
+  const B_STRONG = ["연차수당", "연차비", "미사용 연차", "정산", "잔여연차"];
+  const B_WEAK = ["수당", "지급", "얼마", "계산", "정리", "청구"];
+
+  const hasAnnual = sl.includes("연차");
+  const bStrongHit = B_STRONG.some((k) => s.includes(k));
+  const bWeakHit = B_WEAK.some((k) => sl.includes(k));
+
+  if (bStrongHit) return "B";
+  if (hasAnnual && bWeakHit) return "B";
+
+  // A: 연차휴가(운영/사용/발생)
   const A = ["연차", "반차", "시간연차", "이월", "차감", "연차 발생", "연차 부여", "연차 신청"];
   if (A.some((k) => s.includes(k))) return "A";
 
-  // B: 연차수당/정산(✅ 여기서는 "수당/지급" 단독키워드 제거)
-  const B = ["잔여연차", "연차수당", "연차비", "미사용 연차", "정산"];
-  if (B.some((k) => s.includes(k))) return "B";
-
-  // 나머지
   return "C";
 }
 
@@ -144,13 +149,21 @@ function extractTokens(q: string): string[] {
   if (sl.includes("휴일근무")) force.push("휴일근무", "수당", "신청", "지급");
   if (sl.includes("평일") && sl.includes("심야")) force.push("평일", "심야", "근무", "신청");
 
+  // ✅ 연차 수당/정산 질문이면 수당 관련 토큰을 강제로 넣어 검색을 유도
+  const isAnnualAllowance =
+    sl.includes("연차") &&
+    (sl.includes("수당") || sl.includes("정산") || sl.includes("지급") || sl.includes("얼마") || sl.includes("계산"));
+
+  if (isAnnualAllowance) {
+    force.push("연차수당", "연차비", "미사용", "정산", "지급", "기준", "계산");
+  }
+
   return uniq([...force, ...base]).slice(0, MAX_TOKENS);
 }
 
 /** -----------------------------
- * File hint
- *  - B가 무조건 "연차" 힌트로 가면 프로젝트 질문도 연차 문서로 끌려갈 수 있음
- *  - classifyIntent에서 프로젝트는 C로 보내므로 여기서도 프로젝트/휴일근무 힌트를 선반영
+ * File hint (핵심 수정)
+ *  - B는 "연차수당" 힌트를 주어 휴가규정(운영)로만 빨려가지 않게 함
  * ---------------------------- */
 function pickFileHint(q: string, intent: Intent): string | null {
   const sl = safeLower(q);
@@ -158,7 +171,9 @@ function pickFileHint(q: string, intent: Intent): string | null {
   if (sl.includes("프로젝트")) return "프로젝트";
   if (sl.includes("휴일근무") || (sl.includes("평일") && sl.includes("심야"))) return "근무";
 
-  if (intent === "A" || intent === "B") return "연차";
+  // ✅ intent 분기
+  if (intent === "B") return "연차수당";
+  if (intent === "A") return "연차";
 
   if (sl.includes("화환")) return "화환";
   if (sl.includes("경조") || sl.includes("결혼") || sl.includes("조위") || sl.includes("부고") || sl.includes("장례"))
@@ -173,7 +188,6 @@ function pickFileHint(q: string, intent: Intent): string | null {
 
 /** -----------------------------
  * (구 문서 대응) 표 복원기 + 텍스트 클린
- *  - 기존 구현 유지하되, 함수 분리/정리
  * ---------------------------- */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
@@ -433,8 +447,14 @@ export async function POST(req: Request) {
 
     if (!hits?.length) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
+    // ✅ (핵심 수정) hits도 점수 매겨 bestDocId를 선정해 엉뚱한 문서로 고정되는 걸 줄임
+    const hitsScored = hits
+      .map((h) => ({ ...h, score: calcScore(h, tokens) }))
+      .sort((a: any, b: any) => b.score - a.score);
+
     // 2) best doc 기준 pool 확장
-    const bestDocId = hits[0].document_id;
+    const bestDocId = hitsScored[0].document_id;
+
     const poolRes = await supabaseAdmin.rpc("search_chunks_in_document", {
       doc_id: bestDocId,
       q: question,
@@ -443,7 +463,7 @@ export async function POST(req: Request) {
       min_sim: POOL_MIN_SIM,
     });
 
-    const pool: RpcHit[] = ((poolRes.data as any) ?? hits) as any;
+    const pool: RpcHit[] = ((poolRes.data as any) ?? hitsScored) as any;
 
     // 3) scoring + anchor 선정
     const scored = pool
