@@ -136,7 +136,7 @@ export default function ChatPage() {
           ts: Date.now(),
           intent: json.intent ?? "C",
           chunks: chunks.length ? chunks : undefined,
-          content: chunks.length ? undefined : `분류: 의도 ${json.intent ?? "C"}\n\n${fallbackText}`,
+          content: chunks.length ? undefined : `${fallbackText}`,
         },
       ]);
     } catch {
