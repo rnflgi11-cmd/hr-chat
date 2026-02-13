@@ -1,5 +1,7 @@
 "use client";
 
+import AdminNav from "@/components/AdminNav";
+
 import { useEffect, useMemo, useState } from "react";
 import { loadSessionUser } from "@/lib/auth";
 
@@ -254,15 +256,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8 }}>
-  <a href="/chat" style={{ ...btn, textDecoration: "none", display: "inline-block" }}>
-    채팅
-  </a>
-
-  <a href="/admin/users" style={{ ...btn, textDecoration: "none", display: "inline-block" }}>
-    사용자 관리
-  </a>
-</div>
+            <AdminNav current="docs" />
 
           </div>
 
