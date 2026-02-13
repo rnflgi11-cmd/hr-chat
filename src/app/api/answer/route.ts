@@ -109,49 +109,37 @@ function pickFileHint(q: string, intent: "A" | "B" | "C"): string | null {
  * - 표 아래 다른 섹션(기타/유의사항/신청방법 등)이 표 안으로 섞이지 않게 컷팅
  */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
-  const rawLines = (text ?? "")
+  const raw = (text ?? "")
     .split("\n")
     .map((l) => l.replace(/\r/g, "").trim())
     .filter((l) => l.length > 0);
 
-  if (rawLines.length < 10) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
+  if (raw.length < 8) return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
 
-  // ✅ 표 헤더 후보 (여기에 "기타 휴가" 표 헤더 추가)
-  const headerCandidates: { headers: string[]; firstColAllow?: Set<string> }[] = [
-    {
-      headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"],
-      firstColAllow: new Set(["경사", "조의"]),
-    },
+  type Cand = { headers: string[]; firstColAllow?: Set<string> };
 
-    // ✅ 기타 휴가 표 (구분/유형/내용/휴가일수/첨부서류/비고)
-    {
-      headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"],
-      firstColAllow: new Set(["기타"]),
-    },
+  // ✅ 표 헤더 후보들 (필요하면 계속 추가 가능)
+  const cands: Cand[] = [
+    // 경조휴가 표
+    { headers: ["구분", "경조유형", "대상", "휴가일수", "첨부서류", "비고"], firstColAllow: new Set(["경사", "조의"]) },
 
+    // 기타휴가 표
+    { headers: ["구분", "유형", "내용", "휴가일수", "첨부서류", "비고"], firstColAllow: new Set(["기타"]) },
+
+    // 공가/기타 간단표
     { headers: ["구분", "내용"] },
+
+    // 기타 복리후생류
     { headers: ["항목", "지원대상", "신청 기준일"] },
     { headers: ["항목", "지원 대상", "신청 기준일"] },
+
+    // 포상/지원금류
     { headers: ["구분", "기준", "포상 금액"] },
     { headers: ["구분", "내용", "지급 비용", "비고"] },
     { headers: ["구분", "내용", "지급비용", "비고"] },
   ];
 
-  function findHeaderIndex(headers: string[]) {
-    for (let i = 0; i <= rawLines.length - headers.length; i++) {
-      let ok = true;
-      for (let j = 0; j < headers.length; j++) {
-        if (rawLines[i + j] !== headers[j]) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) return i;
-    }
-    return -1;
-  }
-
-  // 표 밑 섹션 시작 단어(표 row 계산은 여기서 멈춤)
+  // 표 밖으로 밀어낼 섹션/마커
   const sectionStarts = new Set([
     "기타",
     "참고사항",
@@ -166,98 +154,126 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     "필수 확인 사항",
     "포상 제외 대상",
     "포상 기준",
-    // ✅ 다음 섹션 마커도 컷 신호로 추가
-    "✅",
-    "📌",
   ]);
 
-  for (const cand of headerCandidates) {
-    const headers = cand.headers;
-    const hIdx = findHeaderIndex(headers);
-    if (hIdx === -1) continue;
+  const startsWithMarker = (s: string) => s.startsWith("✅") || s.startsWith("📌");
 
+  // i에서 어떤 헤더가 시작되는지 찾기 (가장 긴 헤더 우선)
+  function matchHeaderAt(i: number): Cand | null {
+    const sorted = [...cands].sort((a, b) => b.headers.length - a.headers.length);
+    for (const cand of sorted) {
+      const h = cand.headers;
+      if (i + h.length > raw.length) continue;
+      let ok = true;
+      for (let k = 0; k < h.length; k++) {
+        if (raw[i + k] !== h[k]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return cand;
+    }
+    return null;
+  }
+
+  // 다음 헤더 시작점 찾기
+  function findNextHeaderStart(from: number): number {
+    for (let i = from; i < raw.length; i++) {
+      if (matchHeaderAt(i)) return i;
+    }
+    return -1;
+  }
+
+  // 표 파싱: headers 다음부터 셀들을 모아서 cols 단위로 row 생성
+  function parseTable(from: number, cand: Cand): { md: string; consumedUntil: number; hasTable: boolean } {
+    const headers = cand.headers;
     const cols = headers.length;
 
-    const before = rawLines.slice(0, hIdx).join("\n").trim();
-    const after = rawLines.slice(hIdx + headers.length);
+    let i = from + cols; // headers 끝 다음부터
+    const cells: string[] = [];
 
-    // row 계산 범위 컷
-    let cutForRowCalc = after.length;
-    for (let i = 0; i < after.length; i++) {
-      // ✅ 섹션 시작 단어/마커로 컷
-      if (sectionStarts.has(after[i]) || after[i].startsWith("✅") || after[i].startsWith("📌")) {
-        cutForRowCalc = i;
-        break;
-      }
-      // 표가 다시 시작되는 경우(헤더가 또 나오면)도 컷
-      if (after[i] === headers[0] && after.slice(i, i + headers.length).every((v, k) => v === headers[k])) {
-        cutForRowCalc = i;
-        break;
-      }
+    while (i < raw.length) {
+      const line = raw[i];
+
+      // 다음 표가 시작되면 stop (다른 헤더든 같은 헤더든)
+      if (matchHeaderAt(i)) break;
+
+      // 섹션 시작 키워드/마커면 stop (표 밖으로 밀기)
+      if (sectionStarts.has(line) || startsWithMarker(line)) break;
+
+      cells.push(line);
+      i++;
     }
 
-    const tableArea = after.slice(0, cutForRowCalc);
-    const tail = after.slice(cutForRowCalc).join("\n").trim();
-
-    // 표 row 후보 생성(일단 cols 단위로 묶기)
-    const rowCount = Math.floor(tableArea.length / cols);
-    if (rowCount <= 0) continue;
+    const rowCount = Math.floor(cells.length / cols);
+    if (rowCount <= 0) return { md: "", consumedUntil: from + 1, hasTable: false };
 
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) {
-      const row = tableArea.slice(r * cols, r * cols + cols);
-      rows.push(row);
+      rows.push(cells.slice(r * cols, r * cols + cols));
     }
 
-    // ✅ 첫 컬럼 검증(경조: 경사/조의, 기타휴가: 기타 등) -> 표 깨짐 방지
-    let rowsCut = rows.length;
+    // 첫 컬럼 검증(표 깨짐 방지)
+    let cut = rows.length;
     if (cand.firstColAllow) {
-      for (let i = 0; i < rows.length; i++) {
-        const c0 = (rows[i][0] ?? "").trim();
+      for (let r = 0; r < rows.length; r++) {
+        const c0 = (rows[r][0] ?? "").trim();
         if (c0 && !cand.firstColAllow.has(c0)) {
-          rowsCut = i;
+          cut = r;
           break;
         }
       }
     }
-    const safeRows = rows.slice(0, rowsCut);
-    const extraTail =
-      rowsCut < rows.length
-        ? rows
-            .slice(rowsCut)
-            .flat()
-            .join("\n")
-            .trim()
-        : "";
 
-    if (!safeRows.length) continue;
+    const safeRows = rows.slice(0, cut);
+    if (!safeRows.length) return { md: "", consumedUntil: from + cols, hasTable: false };
 
-    const md: string[] = [];
-    md.push(`| ${headers.join(" | ")} |`);
-    md.push(`| ${headers.map(() => "---").join(" | ")} |`);
+    const mdLines: string[] = [];
+    mdLines.push(`| ${headers.join(" | ")} |`);
+    mdLines.push(`| ${headers.map(() => "---").join(" | ")} |`);
     for (const row of safeRows) {
-      md.push(`| ${row.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
+      mdLines.push(`| ${row.map((c) => (c ?? "").replace(/\|/g, "｜")).join(" | ")} |`);
     }
 
-    const outParts: string[] = [];
-    if (before) outParts.push(before);
+    // consumedUntil: 실제로 사용한 셀까지만 소비(검증 컷 반영)
+    const usedCells = safeRows.length * cols;
+    const consumedUntil = (from + cols) + usedCells;
 
-    // 표는 codeblock으로 감싸서 UI에서 안 깨지게
-    outParts.push("```text\n" + md.join("\n") + "\n```");
-
-    // ✅ 핵심: 표 아래쪽(tail/extraTail)에 또 다른 표가 있으면 “재귀로” 한 번 더 복원
-    const mergedTail = [tail, extraTail].filter(Boolean).join("\n").trim();
-    if (mergedTail) {
-      const again = rebuildFlatTableWithContext(mergedTail);
-      outParts.push(again.rebuilt);
-      return { rebuilt: outParts.join("\n\n").trim(), hasTable: true };
-    }
-
-    return { rebuilt: outParts.join("\n\n").trim(), hasTable: true };
+    return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil, hasTable: true };
   }
 
-  return { rebuilt: (text ?? "").toString().trim(), hasTable: false };
+  // ✅ 전체 스캔: 표를 여러 개 찾아서 전부 복원
+  const out: string[] = [];
+  let i = 0;
+  let foundAny = false;
+
+  while (i < raw.length) {
+    const cand = matchHeaderAt(i);
+    if (!cand) {
+      out.push(raw[i]);
+      i++;
+      continue;
+    }
+
+    // 헤더 앞에 남은 텍스트는 그대로
+    // (matchHeaderAt가 i에서 찾았으니 이미 out에 들어갈 건 없음)
+
+    const parsed = parseTable(i, cand);
+    if (!parsed.hasTable) {
+      // 헤더였는데 표로 못 만들면 그냥 텍스트로 흘려보냄(안전)
+      out.push(raw[i]);
+      i++;
+      continue;
+    }
+
+    foundAny = true;
+    out.push(parsed.md);
+    i = parsed.consumedUntil; // ✅ 표로 소비한 만큼 점프
+  }
+
+  return { rebuilt: out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim(), hasTable: foundAny };
 }
+
 
 
 /** 표(마크다운 |...|)가 있으면 codeblock으로 감싸기 */
