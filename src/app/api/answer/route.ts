@@ -506,7 +506,53 @@ export async function POST(req: Request) {
     const top = scored.slice(0, 10);
     const tableFirst = top.find((h) => rebuildFlatTableWithContext(h.content ?? "").hasTable);
     let finalHits: Hit[] = [];
+// ✅ (추가) "기타 휴가 표" 헤더가 보이는데 내용이 짤린 경우, 같은 문서에서 추가 조각을 더 가져온다
+const needsMoreLeaveTable = finalHits.some((h) => {
+  const t = (h.content ?? "").toString();
 
+  const hasLeaveHeader =
+    t.includes("구분") &&
+    t.includes("유형") &&
+    t.includes("내용") &&
+    t.includes("휴가일수") &&
+    t.includes("첨부서류") &&
+    t.includes("비고");
+
+  // 스샷에 있어야 하는 키워드들이 없으면 "잘렸을 가능성"이 높음
+  const seemsTruncated =
+    hasLeaveHeader &&
+    !(t.includes("직무교육") || t.includes("병가") || t.includes("연차 차감") || t.includes("연차차감") || t.includes("없음"));
+
+  return seemsTruncated;
+});
+
+if (needsMoreLeaveTable) {
+  const extraTokens = ["기타", "휴가", "병역의무", "민방위", "예비군", "직무교육", "병가", "연차", "차감", "없음"];
+  const extraQ = "기타 휴가 병역의무 민방위 예비군 직무교육 병가 연차 차감 없음";
+
+  const { data: extraHits } = await supabaseAdmin.rpc("search_chunks_in_document", {
+    doc_id: bestDocId,
+    q: extraQ,
+    tokens: extraTokens,
+    match_count: 10,
+    min_sim: 0.05,
+  });
+
+  const extras = ((extraHits ?? []) as any[])
+    // 이미 있는 chunk는 중복 제거
+    .filter((x) => !finalHits.some((h) => h.document_id === x.document_id && h.chunk_index === x.chunk_index))
+    // 상위 2개만 추가 (너무 길어지는 것 방지)
+    .slice(0, 2)
+    .map((h) => ({
+      document_id: h.document_id,
+      filename: h.filename,
+      chunk_index: h.chunk_index,
+      content: h.content,
+      sim: h.sim,
+    })) as Hit[];
+
+  if (extras.length) finalHits = [...finalHits, ...extras];
+}
     if (tableFirst) {
       const picked = [tableFirst, ...top.filter((x) => x !== tableFirst)].slice(0, 5);
       finalHits = picked.map((h) => ({
