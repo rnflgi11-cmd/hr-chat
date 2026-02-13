@@ -212,10 +212,11 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
     if (rowCount <= 0) return { md: "", consumedUntil: from + 1, hasTable: false };
 
     const remain = cells.length % cols;
-    if (remain !== 0 && remain >= Math.max(2, cols - 2)) {
-      while (cells.length % cols !== 0) cells.push("");
-      rowCount = Math.floor(cells.length / cols);
-    }
+if (remain !== 0) {
+  // ✅ 남은 셀이 1개라도 있으면 마지막 행로 살린다 (빈칸 패딩)
+  while (cells.length % cols !== 0) cells.push("");
+  rowCount = Math.floor(cells.length / cols);
+}
 
     const rows: string[][] = [];
     for (let r = 0; r < rowCount; r++) {
