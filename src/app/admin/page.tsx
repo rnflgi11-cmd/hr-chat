@@ -376,7 +376,7 @@ export default function AdminPage() {
         </div>
 
         <div className="mt-4 text-center text-xs text-white/45">
-          © Covision HR Demo
+          © Covision HR
         </div>
       </div>
     </div>

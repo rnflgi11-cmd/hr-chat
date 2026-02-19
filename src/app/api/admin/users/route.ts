@@ -105,7 +105,6 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "users required" }, { status: 400 });
       }
 
-      // ✅ map 결과 타입을 확정해서 filter에서 u 타입이 흔들리지 않게
       const mapped: BulkUser[] = users.map((u: any): BulkUser => {
         const emp_no = (u?.emp_no ?? "").toString().trim();
         const name = (u?.name ?? "").toString().trim();
@@ -113,7 +112,6 @@ export async function POST(req: Request) {
         return { emp_no, name, role };
       });
 
-      // ✅ filter 콜백 인자 타입을 명시(핵심)
       const normalized: BulkUser[] = mapped.filter(
         (u: BulkUser) => !!u.emp_no && !!u.name
       );
@@ -137,7 +135,6 @@ export async function POST(req: Request) {
         seen.add(u.emp_no);
       }
 
-      // insert/update 카운트(정확)
       const empNos: string[] = normalized.map((u) => u.emp_no);
 
       const { data: existedRows, error: existedErr } = await supabaseAdmin
@@ -168,6 +165,51 @@ export async function POST(req: Request) {
         inserted,
         updated,
       });
+    }
+
+    // --------------------
+    // DELETE_MANY (선택 삭제)
+    // body.ids: [id, id, ...]
+    // --------------------
+    if (action === "delete_many") {
+      const idsRaw: unknown = body?.ids;
+      const ids: string[] = Array.isArray(idsRaw)
+        ? idsRaw.map((x) => String(x).trim()).filter(Boolean)
+        : [];
+
+      if (ids.length === 0) {
+        return NextResponse.json({ ok: true, deleted: 0 });
+      }
+
+      // ✅ 안전장치: 마지막 admin 삭제 방지
+      const { data: adminAll, error: adminAllErr } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("role", "admin");
+      if (adminAllErr) throw adminAllErr;
+
+      const totalAdminCount = (adminAll ?? []).length;
+
+      const { data: adminSelected, error: adminSelErr } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .in("id", ids)
+        .eq("role", "admin");
+      if (adminSelErr) throw adminSelErr;
+
+      const selectedAdminCount = (adminSelected ?? []).length;
+
+      if (selectedAdminCount > 0 && totalAdminCount <= selectedAdminCount) {
+        return NextResponse.json(
+          { error: "마지막 관리자 계정은 삭제할 수 없습니다." },
+          { status: 400 }
+        );
+      }
+
+      const { error } = await supabaseAdmin.from("users").delete().in("id", ids);
+      if (error) throw error;
+
+      return NextResponse.json({ ok: true, deleted: ids.length });
     }
 
     // --------------------

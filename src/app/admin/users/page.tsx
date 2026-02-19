@@ -128,6 +128,9 @@ export default function AdminUsersPage() {
 
   const [q, setQ] = useState("");
 
+  // ✅ 선택 상태 (id -> boolean)
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+
   // upsert form
   const [empNo, setEmpNo] = useState("");
   const [name, setName] = useState("");
@@ -177,10 +180,22 @@ export default function AdminUsersPage() {
     setMsg(null);
     try {
       const json = await post({ action: "list", q: nextQ ?? q });
-      setRows(json.users ?? []);
+      const list: UserRow[] = json.users ?? [];
+      setRows(list);
+
+      // ✅ 검색결과가 바뀌면, 현재 결과에 없는 선택은 정리
+      const idSet = new Set(list.map((r) => r.id));
+      setSelected((prev) => {
+        const next: Record<string, boolean> = {};
+        for (const [id, v] of Object.entries(prev)) {
+          if (v && idSet.has(id)) next[id] = true;
+        }
+        return next;
+      });
     } catch (e: any) {
       setMsg(e?.message ?? "불러오기 실패");
       setRows([]);
+      setSelected({});
     } finally {
       setLoading(false);
     }
@@ -230,9 +245,7 @@ export default function AdminUsersPage() {
       const total = json.total ?? items.length;
       const affected = json.affected ?? null;
       setCsvResult(
-        `일괄 저장 완료! 총 ${total}건${
-          affected ? ` (적용 ${affected}건)` : ""
-        }`
+        `일괄 저장 완료! 총 ${total}건${affected ? ` (적용 ${affected}건)` : ""}`
       );
 
       // reset
@@ -272,7 +285,7 @@ export default function AdminUsersPage() {
 
     if (!file) return;
 
-    // 안전: 용량 제한 (원하면 더 늘려도 됨)
+    // 안전: 용량 제한
     if (file.size > 2 * 1024 * 1024) {
       setCsvResult("CSV 파일이 너무 큽니다. (최대 2MB)");
       return;
@@ -280,6 +293,58 @@ export default function AdminUsersPage() {
 
     const text = await file.text();
     setCsvText(text);
+  }
+
+  // ✅ selection helpers (검색결과 = 현재 rows 기준)
+  function toggleOne(id: string) {
+    setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  function selectAllInResult() {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const r of rows) next[r.id] = true;
+      return next;
+    });
+  }
+
+  function unselectAllInResult() {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const r of rows) next[r.id] = false;
+      return next;
+    });
+  }
+
+  const selectedCountInResult = useMemo(() => {
+    return rows.reduce((acc, r) => acc + (selected[r.id] ? 1 : 0), 0);
+  }, [rows, selected]);
+
+  async function deleteSelectedInResult() {
+    const ids = rows.filter((r) => selected[r.id]).map((r) => r.id);
+    if (ids.length === 0) return;
+
+    if (!confirm(`선택한 사용자 ${ids.length}명을 삭제할까요?`)) return;
+
+    setLoading(true);
+    setMsg(null);
+    try {
+      const json = await post({ action: "delete_many", ids });
+      const deleted = json.deleted ?? ids.length;
+
+      setRows((prev) => prev.filter((r) => !ids.includes(r.id)));
+      setSelected((prev) => {
+        const next = { ...prev };
+        for (const id of ids) delete next[id];
+        return next;
+      });
+
+      setMsg(`삭제 완료! (${deleted}명)`);
+    } catch (e: any) {
+      setMsg(e?.message ?? "삭제 실패");
+    } finally {
+      setLoading(false);
+    }
   }
 
   if (!user) return null;
@@ -298,8 +363,10 @@ export default function AdminUsersPage() {
   const btnPrimary =
     "rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-indigo-500/15 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
 
-  const card =
-    "rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur";
+  const btnDanger =
+    "rounded-2xl bg-rose-500/15 px-3 py-2 text-xs font-semibold text-rose-200 ring-1 ring-rose-400/25 hover:bg-rose-500/20 disabled:opacity-50";
+
+  const card = "rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0b1220] via-[#0e1628] to-[#0b1220] text-white">
@@ -481,23 +548,65 @@ export default function AdminUsersPage() {
 
         {/* Card: List */}
         <div className={`mt-4 flex min-h-0 flex-1 flex-col ${card}`}>
-          <div className="flex flex-col gap-3 border-b border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm font-semibold">사용자 목록</div>
+          <div className="border-b border-white/10 px-5 py-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold">사용자 목록</div>
+                <div className="mt-1 text-xs text-white/55">
+                  검색결과 기준 전체선택/해제 · 선택삭제
+                </div>
+              </div>
 
-            <div className="flex w-full gap-2 sm:w-[460px]">
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="사번/이름 검색"
-                className={inputClass}
-                disabled={loading}
-              />
+              <div className="flex w-full gap-2 sm:w-[460px]">
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="사번/이름 검색"
+                  className={inputClass}
+                  disabled={loading}
+                />
+                <button
+                  onClick={() => refresh()}
+                  disabled={loading}
+                  className={btnBase}
+                >
+                  검색
+                </button>
+              </div>
+            </div>
+
+            {/* ✅ 문서 페이지처럼 버튼줄 */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                className={btnBase}
+                onClick={selectAllInResult}
+                disabled={loading || rows.length === 0}
+              >
+                전체 선택(검색결과)
+              </button>
+              <button
+                className={btnBase}
+                onClick={unselectAllInResult}
+                disabled={loading || rows.length === 0}
+              >
+                선택 해제(검색결과)
+              </button>
+              <button
+                className={btnDanger}
+                onClick={deleteSelectedInResult}
+                disabled={loading || selectedCountInResult === 0}
+              >
+                선택 삭제 ({selectedCountInResult})
+              </button>
+
+              <div className="flex-1" />
+
               <button
                 onClick={() => refresh()}
                 disabled={loading}
                 className={btnBase}
               >
-                검색
+                새로고침
               </button>
             </div>
           </div>
@@ -510,7 +619,8 @@ export default function AdminUsersPage() {
             ) : (
               <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
                 {/* header row */}
-                <div className="grid grid-cols-[180px_1fr_160px_120px] gap-3 bg-white/5 px-4 py-3 text-xs text-white/55">
+                <div className="grid grid-cols-[56px_180px_1fr_160px_120px] gap-3 bg-white/5 px-4 py-3 text-xs text-white/55">
+                  <div className="flex items-center justify-center">선택</div>
                   <div>사번</div>
                   <div>이름</div>
                   <div>권한</div>
@@ -525,6 +635,8 @@ export default function AdminUsersPage() {
                       loading={loading}
                       onSave={updateRow}
                       optionClass={optionClass}
+                      checked={!!selected[r.id]}
+                      onToggle={() => toggleOne(r.id)}
                     />
                   ))}
                 </div>
@@ -546,11 +658,15 @@ function Row({
   loading,
   onSave,
   optionClass,
+  checked,
+  onToggle,
 }: {
   r: UserRow;
   loading: boolean;
   onSave: (id: string, patch: Partial<Pick<UserRow, "name" | "role">>) => void;
   optionClass: string;
+  checked: boolean;
+  onToggle: () => void;
 }) {
   const [name, setName] = useState(r.name);
   const [role, setRole] = useState<UserRow["role"]>(r.role);
@@ -570,14 +686,26 @@ function Row({
   ].join(" ");
 
   return (
-    <div className="grid grid-cols-[180px_1fr_160px_120px] gap-3 px-4 py-3 items-center">
+    <div className="grid grid-cols-[56px_180px_1fr_160px_120px] gap-3 px-4 py-3 items-center">
+      <div className="flex items-center justify-center">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggle}
+          disabled={loading}
+          className="h-4 w-4 accent-sky-400"
+        />
+      </div>
+
       <div className="truncate font-semibold text-white/90">{r.emp_no}</div>
+
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
         className={inputClass}
         disabled={loading}
       />
+
       <select
         value={role}
         onChange={(e) => setRole(e.target.value as any)}
@@ -591,6 +719,7 @@ function Row({
           admin
         </option>
       </select>
+
       <button
         disabled={!dirty || loading}
         className={btn}
