@@ -15,6 +15,7 @@ export default function LoginPage() {
 
   async function onLogin(e?: React.FormEvent) {
     e?.preventDefault();
+    if (loading) return; // ✅ 중복 제출 방지
     setErr(null);
 
     const trimmedName = name.trim();
@@ -56,120 +57,136 @@ export default function LoginPage() {
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    padding: "12px 12px",
-    marginTop: 8,
-    borderRadius: 10,
-    border: hasError ? "1px solid #ef4444" : "1px solid #e5e7eb",
-    outline: "none",
-    fontSize: 14,
-    background: "#fff",
-  };
-
-  const labelStyle: React.CSSProperties = {
-    fontSize: 13,
-    color: "#374151",
-    fontWeight: 700,
-  };
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        padding: 16,
-        background: "linear-gradient(180deg, #f9fafb 0%, #ffffff 50%, #f9fafb 100%)",
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 420 }}>
-        <div style={{ textAlign: "center", marginBottom: 16 }}>
-          <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.2 }}>
-            코비전 HR 규정 챗봇
-          </div>
-          <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>
-            이름과 사번으로 로그인해요 (데모용)
-          </div>
-        </div>
-
-        <div
-          style={{
-            border: "1px solid #eef2f7",
-            borderRadius: 16,
-            padding: 18,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.05)",
-            background: "#fff",
-          }}
-        >
-          <form onSubmit={onLogin} style={{ display: "grid", gap: 12 }}>
-            <div>
-              <div style={labelStyle}>이름</div>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                style={inputStyle}
-                autoComplete="name"
-                autoFocus
-                placeholder="예: 이름을 입력하세요"
-              />
-            </div>
-
-            <div>
-              <div style={labelStyle}>사번</div>
-              <input
-                value={empNo}
-                onChange={(e) => setEmpNo(e.target.value)}
-                style={inputStyle}
-                autoComplete="off"
-                placeholder="예: 사원번호를 입력하세요"
-              />
-            </div>
-
-            {err && (
-              <div
-                style={{
-                  border: "1px solid #fecaca",
-                  background: "#fef2f2",
-                  color: "#b91c1c",
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  fontSize: 13,
-                  lineHeight: 1.4,
-                }}
-              >
-                {err}
+    <div className="min-h-screen bg-gradient-to-br from-[#0b1220] via-[#0e1628] to-[#0b1220] text-white">
+      <div className="mx-auto flex min-h-screen max-w-6xl items-center px-5 py-10">
+        <div className="grid w-full gap-10 lg:grid-cols-2 lg:gap-14">
+          {/* Left: Hero */}
+          <div className="flex flex-col justify-center">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+                <div className="flex h-full w-full items-center justify-center text-lg font-bold">
+                  HR
+                </div>
               </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                marginTop: 2,
-                padding: "12px 14px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: loading ? "#111827" : "#111827",
-                color: "#fff",
-                fontWeight: 900,
-                cursor: loading ? "not-allowed" : "pointer",
-                opacity: loading ? 0.85 : 1,
-              }}
-            >
-              {loading ? "로그인 중..." : "로그인"}
-            </button>
-
-            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-              * 인사팀 관리자만 문서 업로드 가능
+              <div>
+                <div className="text-sm text-white/60">Covision Internal</div>
+                <div className="text-base font-semibold">코비전 HR 규정 챗봇</div>
+              </div>
             </div>
-          </form>
-        </div>
 
-        <div style={{ textAlign: "center", marginTop: 14, fontSize: 12, color: "#9ca3af" }}>
-          © Covision HR Demo
+            <h1 className="mt-8 text-4xl font-black leading-tight tracking-tight lg:text-5xl">
+              규정 문서 기반으로
+              <br />
+              정확하게 답하는 HR Assistant
+            </h1>
+
+            <p className="mt-4 max-w-xl text-sm leading-relaxed text-white/65">
+              업로드된 사내 규정/매뉴얼에 근거해 답변합니다. (추론/인터넷 정보 사용
+              없음)
+            </p>
+
+            <div className="mt-8 grid gap-3 sm:grid-cols-2">
+              <FeatureCard title="출처 제공" desc="규정 파일/근거 문단을 함께 표시" />
+              <FeatureCard title="권한 기반" desc="인사팀 전용 접근 제어" />
+              <FeatureCard title="PWA 설치" desc="홈 화면에 추가해 앱처럼 사용" />
+              <FeatureCard title="외부 데모" desc="깔끔한 UI로 대외 시연" />
+            </div>
+          </div>
+
+          {/* Right: Login */}
+          <div className="flex items-center justify-center">
+            <div className="w-full max-w-md rounded-3xl bg-white/5 p-6 ring-1 ring-white/10 backdrop-blur-xl sm:p-8">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-bold">사내 로그인</div>
+                  <div className="mt-1 text-sm text-white/60">
+                    이름과 사번으로 인증합니다.
+                  </div>
+                </div>
+                <div className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-300/20">
+                  HR Only
+                </div>
+              </div>
+
+              <form onSubmit={onLogin} className="mt-6 space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-white/70">
+                    이름
+                  </label>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    autoComplete="name"
+                    autoFocus
+                    placeholder="예: 김인호"
+                    className={[
+                      "mt-2 w-full rounded-2xl bg-white/5 px-4 py-3 text-sm outline-none ring-1 placeholder:text-white/35 focus:ring-2",
+                      hasError
+                        ? "ring-rose-300/30 focus:ring-rose-400/35"
+                        : "ring-white/10 focus:ring-sky-400/35",
+                    ].join(" ")}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-white/70">
+                    사번
+                  </label>
+                  <input
+                    value={empNo}
+                    onChange={(e) => setEmpNo(e.target.value)}
+                    autoComplete="off"
+                    inputMode="numeric"
+                    placeholder="예: 01"
+                    className={[
+                      "mt-2 w-full rounded-2xl bg-white/5 px-4 py-3 text-sm outline-none ring-1 placeholder:text-white/35 focus:ring-2",
+                      hasError
+                        ? "ring-rose-300/30 focus:ring-rose-400/35"
+                        : "ring-white/10 focus:ring-sky-400/35",
+                    ].join(" ")}
+                  />
+                </div>
+
+                {err && (
+                  <div className="rounded-2xl bg-rose-500/10 p-3 text-sm text-rose-200 ring-1 ring-rose-300/15">
+                    {err}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="h-[48px] w-full rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:brightness-100"
+                >
+                  {loading ? "로그인 중..." : "로그인"}
+                </button>
+
+                <div className="rounded-2xl bg-white/4 p-4 text-xs text-white/60 ring-1 ring-white/10">
+                  <div className="font-semibold text-white/75">데모 팁</div>
+                  <ul className="mt-2 list-disc space-y-1 pl-4">
+                    <li>“경조휴가”, “기타휴가”, “프로젝트 수당” 질문으로 시연</li>
+                    <li>답변에 출처/파일명이 함께 보이게 구성</li>
+                  </ul>
+                </div>
+
+                <div className="text-center text-xs text-white/45">
+                  문제가 지속되면 인사팀으로 문의해 주세요.
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function FeatureCard({ title, desc }: { title: string; desc: string }) {
+  return (
+    <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
+      <div className="text-sm font-semibold">{title}</div>
+      <div className="mt-1 text-xs text-white/60">{desc}</div>
     </div>
   );
 }
