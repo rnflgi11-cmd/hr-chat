@@ -9,7 +9,7 @@ export default function AdminNav({
     [
       "rounded-2xl px-3 py-2 text-xs font-semibold ring-1 transition",
       active
-        ? "bg-white/12 text-white ring-white/15"
+        ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white ring-blue-400/30 shadow-md"
         : "bg-white/6 text-white/80 ring-white/10 hover:bg-white/10",
     ].join(" ");
 
