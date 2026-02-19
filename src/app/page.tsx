@@ -138,7 +138,7 @@ export default function LoginPage() {
                     onChange={(e) => setEmpNo(e.target.value)}
                     autoComplete="off"
                     inputMode="numeric"
-                    placeholder="예: 01"
+                    placeholder="예: 사원번호를 입력하세요"
                     className={[
                       "mt-2 w-full rounded-2xl bg-white/5 px-4 py-3 text-sm outline-none ring-1 placeholder:text-white/35 focus:ring-2",
                       hasError
