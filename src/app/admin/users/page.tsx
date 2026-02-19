@@ -49,7 +49,6 @@ export default function AdminUsersPage() {
       body: JSON.stringify({ ...body, user }),
     });
 
-    // ✅ JSON 파싱 안전하게 (빈 응답/에러 응답 대비)
     const text = await res.text();
     const json = text ? JSON.parse(text) : {};
     if (!res.ok) throw new Error(json.error ?? `요청 실패 (${res.status})`);
@@ -112,12 +111,19 @@ export default function AdminUsersPage() {
 
   if (!user) return null;
 
+  // ✅ 드롭다운(option) 다크 배경용
+  const optionClass = "bg-[#0e1628] text-white";
+
   const inputClass =
     "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 placeholder:text-white/35 focus:ring-2 focus:ring-sky-400/35";
+
+  // ✅ select에 appearance-none 추가 (브라우저 기본 스타일 충돌 완화)
   const selectClass =
-    "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35";
+    "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 appearance-none";
+
   const btnBase =
     "rounded-2xl bg-white/6 px-3 py-2 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-50";
+
   const btnPrimary =
     "rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-indigo-500/15 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
 
@@ -142,7 +148,6 @@ export default function AdminUsersPage() {
             </div>
           </div>
 
-          {/* ✅ 기존 AdminNav 유지 */}
           <AdminNav current="users" />
         </div>
 
@@ -180,8 +185,12 @@ export default function AdminUsersPage() {
               className={selectClass}
               disabled={loading}
             >
-              <option value="user">user</option>
-              <option value="admin">admin</option>
+              <option value="user" className={optionClass}>
+                user
+              </option>
+              <option value="admin" className={optionClass}>
+                admin
+              </option>
             </select>
             <button onClick={upsert} disabled={loading} className={btnPrimary}>
               {loading ? "처리 중..." : "저장"}
@@ -235,7 +244,13 @@ export default function AdminUsersPage() {
 
                 <div className="divide-y divide-white/10 bg-white/2">
                   {rows.map((r) => (
-                    <Row key={r.id} r={r} loading={loading} onSave={updateRow} />
+                    <Row
+                      key={r.id}
+                      r={r}
+                      loading={loading}
+                      onSave={updateRow}
+                      optionClass={optionClass}
+                    />
                   ))}
                 </div>
               </div>
@@ -255,10 +270,12 @@ function Row({
   r,
   loading,
   onSave,
+  optionClass,
 }: {
   r: UserRow;
   loading: boolean;
   onSave: (id: string, patch: Partial<Pick<UserRow, "name" | "role">>) => void;
+  optionClass: string;
 }) {
   const [name, setName] = useState(r.name);
   const [role, setRole] = useState<UserRow["role"]>(r.role);
@@ -266,8 +283,11 @@ function Row({
 
   const inputClass =
     "w-full rounded-2xl bg-white/5 px-4 py-2.5 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 disabled:opacity-60";
+
+  // ✅ 여기도 appearance-none 추가
   const selectClass =
-    "w-full rounded-2xl bg-white/5 px-4 py-2.5 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 disabled:opacity-60";
+    "w-full rounded-2xl bg-white/5 px-4 py-2.5 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 disabled:opacity-60 appearance-none";
+
   const btn = [
     "rounded-2xl px-3 py-2 text-xs font-semibold ring-1 transition disabled:opacity-50",
     dirty
@@ -290,8 +310,12 @@ function Row({
         className={selectClass}
         disabled={loading}
       >
-        <option value="user">user</option>
-        <option value="admin">admin</option>
+        <option value="user" className={optionClass}>
+          user
+        </option>
+        <option value="admin" className={optionClass}>
+          admin
+        </option>
       </select>
       <button
         disabled={!dirty || loading}
