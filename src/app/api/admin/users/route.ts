@@ -18,10 +18,25 @@ async function requireAdmin(supabaseAdmin: SupabaseClient, body: any) {
   const empNo = (body?.user?.emp_no ?? "").toString().trim();
   if (!empNo) throw new Error("forbidden");
 
-  // ✅ 로컬스토리지 role 믿지 않고 DB에서 확인
-  const { data, error } = await supabaseAdmin.from("users").select("role").eq("emp_no", empNo).maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from("users")
+    .select("role")
+    .eq("emp_no", empNo)
+    .maybeSingle();
+
   if (error) throw error;
   if (!data || data.role !== "admin") throw new Error("forbidden");
+}
+
+type Role = "admin" | "user";
+type BulkUser = { emp_no: string; name: string; role: Role };
+
+function normalizeRole(v: any): Role {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase() === "admin"
+    ? "admin"
+    : "user";
 }
 
 export async function POST(req: Request) {
@@ -38,6 +53,7 @@ export async function POST(req: Request) {
     // --------------------
     if (action === "list") {
       const q = (body?.q ?? "").toString().trim();
+
       let query = supabaseAdmin
         .from("users")
         .select("id, emp_no, name, role, created_at")
@@ -58,10 +74,14 @@ export async function POST(req: Request) {
     if (action === "upsert") {
       const emp_no = (body?.emp_no ?? "").toString().trim();
       const name = (body?.name ?? "").toString().trim();
-      const role = (body?.role ?? "user").toString().trim();
+      const role = normalizeRole(body?.role);
 
-      if (!emp_no || !name) return NextResponse.json({ error: "emp_no and name are required" }, { status: 400 });
-      if (!["admin", "user"].includes(role)) return NextResponse.json({ error: "role must be admin|user" }, { status: 400 });
+      if (!emp_no || !name) {
+        return NextResponse.json(
+          { error: "emp_no and name are required" },
+          { status: 400 }
+        );
+      }
 
       const { data, error } = await supabaseAdmin
         .from("users")
@@ -74,20 +94,100 @@ export async function POST(req: Request) {
     }
 
     // --------------------
+    // BULK_UPSERT (CSV/일괄 등록)
+    // body.users: [{ emp_no, name, role? }, ...]
+    // --------------------
+    if (action === "bulk_upsert") {
+      const usersRaw: unknown = body?.users;
+      const users: any[] = Array.isArray(usersRaw) ? usersRaw : [];
+
+      if (users.length === 0) {
+        return NextResponse.json({ error: "users required" }, { status: 400 });
+      }
+
+      // ✅ map 결과 타입을 확정해서 filter에서 u 타입이 흔들리지 않게
+      const mapped: BulkUser[] = users.map((u: any): BulkUser => {
+        const emp_no = (u?.emp_no ?? "").toString().trim();
+        const name = (u?.name ?? "").toString().trim();
+        const role = normalizeRole(u?.role);
+        return { emp_no, name, role };
+      });
+
+      // ✅ filter 콜백 인자 타입을 명시(핵심)
+      const normalized: BulkUser[] = mapped.filter(
+        (u: BulkUser) => !!u.emp_no && !!u.name
+      );
+
+      if (normalized.length === 0) {
+        return NextResponse.json(
+          { error: "no valid users" },
+          { status: 400 }
+        );
+      }
+
+      // 입력 내 emp_no 중복 방지
+      const seen = new Set<string>();
+      for (const u of normalized) {
+        if (seen.has(u.emp_no)) {
+          return NextResponse.json(
+            { error: `duplicate emp_no in input: ${u.emp_no}` },
+            { status: 400 }
+          );
+        }
+        seen.add(u.emp_no);
+      }
+
+      // insert/update 카운트(정확)
+      const empNos: string[] = normalized.map((u) => u.emp_no);
+
+      const { data: existedRows, error: existedErr } = await supabaseAdmin
+        .from("users")
+        .select("emp_no")
+        .in("emp_no", empNos);
+
+      if (existedErr) throw existedErr;
+
+      const existed = new Set<string>(
+        (((existedRows as Array<{ emp_no: string }>) ?? []) as Array<{
+          emp_no: string;
+        }>).map((x) => x.emp_no)
+      );
+
+      const inserted = normalized.filter((u) => !existed.has(u.emp_no)).length;
+      const updated = normalized.length - inserted;
+
+      const { error } = await supabaseAdmin
+        .from("users")
+        .upsert(normalized, { onConflict: "emp_no" });
+
+      if (error) throw error;
+
+      return NextResponse.json({
+        ok: true,
+        total: normalized.length,
+        inserted,
+        updated,
+      });
+    }
+
+    // --------------------
     // UPDATE (id 기준)
     // --------------------
     if (action === "update") {
       const id = (body?.id ?? "").toString().trim();
       const patch: any = {};
-      if (typeof body?.name === "string") patch.name = body.name.trim();
-      if (typeof body?.role === "string") patch.role = body.role.trim();
 
-      if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-      if (patch.role && !["admin", "user"].includes(patch.role)) {
-        return NextResponse.json({ error: "role must be admin|user" }, { status: 400 });
+      if (typeof body?.name === "string") patch.name = body.name.trim();
+      if (body?.role !== undefined) patch.role = normalizeRole(body.role);
+
+      if (!id) {
+        return NextResponse.json({ error: "id required" }, { status: 400 });
       }
       if (patch.name !== undefined && !patch.name) {
-        return NextResponse.json({ error: "name cannot be empty" }, { status: 400 });
+        return NextResponse.json(
+          { error: "name cannot be empty" },
+          { status: 400 }
+        );
       }
 
       const { data, error } = await supabaseAdmin
