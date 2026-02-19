@@ -1,7 +1,6 @@
 "use client";
 
 import AdminNav from "@/components/AdminNav";
-
 import { useEffect, useMemo, useState } from "react";
 import { loadSessionUser } from "@/lib/auth";
 
@@ -16,7 +15,11 @@ type Doc = {
 };
 
 export default function AdminPage() {
-  const user = useMemo(() => (typeof window !== "undefined" ? loadSessionUser() : null), []);
+  const user = useMemo(
+    () => (typeof window !== "undefined" ? loadSessionUser() : null),
+    []
+  );
+
   const [docs, setDocs] = useState<Doc[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
@@ -73,7 +76,10 @@ export default function AdminPage() {
       files.forEach((file) => form.append("file", file));
       form.append("user", JSON.stringify(user));
 
-      const res = await fetch("/api/admin/upload", { method: "POST", body: form });
+      const res = await fetch("/api/admin/upload", {
+        method: "POST",
+        body: form,
+      });
       const json = await res.json();
 
       if (!res.ok) {
@@ -141,7 +147,12 @@ export default function AdminPage() {
   // ✅ 선택 일괄 삭제
   async function removeSelected(ids: string[]) {
     if (ids.length === 0) return;
-    if (!confirm(`선택한 ${ids.length}개 문서를 삭제할까요?\n(스토리지 + DB(chunks 포함)에서 삭제)`)) return;
+    if (
+      !confirm(
+        `선택한 ${ids.length}개 문서를 삭제할까요?\n(스토리지 + DB(chunks 포함)에서 삭제)`
+      )
+    )
+      return;
 
     setBusy(true);
     setMsg("선택 문서 삭제 중...");
@@ -159,8 +170,12 @@ export default function AdminPage() {
         return;
       }
 
-      const extra = json.storage_error ? ` (storage 일부 실패: ${json.storage_error})` : "";
-      setMsg(`삭제 완료! 문서 ${json.deleted_documents ?? ids.length}건${extra}`);
+      const extra = json.storage_error
+        ? ` (storage 일부 실패: ${json.storage_error})`
+        : "";
+      setMsg(
+        `삭제 완료! 문서 ${json.deleted_documents ?? ids.length}건${extra}`
+      );
       setSelected({});
       await refresh();
     } finally {
@@ -174,222 +189,196 @@ export default function AdminPage() {
     return docs.filter((d) => d.filename.toLowerCase().includes(t));
   }, [docs, q]);
 
-  const pageWrap: React.CSSProperties = {
-    minHeight: "100vh",
-    background: "linear-gradient(180deg, #f9fafb 0%, #ffffff 60%, #f9fafb 100%)",
-    padding: 16,
-  };
-
-  const shell: React.CSSProperties = { maxWidth: 980, margin: "24px auto" };
-
-  const card: React.CSSProperties = {
-    border: "1px solid #eef2f7",
-    borderRadius: 16,
-    background: "#fff",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.05)",
-    padding: 16,
-  };
-
-  const header: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 14,
-  };
-
-  const btn: React.CSSProperties = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: busy ? "not-allowed" : "pointer",
-    fontWeight: 800,
-    fontSize: 13,
-    opacity: busy ? 0.75 : 1,
-  };
-
-  const primaryBtn: React.CSSProperties = {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #111827",
-    background: "#111827",
-    color: "#fff",
-    cursor: busy ? "not-allowed" : "pointer",
-    fontWeight: 900,
-    opacity: busy ? 0.85 : 1,
-    whiteSpace: "nowrap",
-  };
-
-  const dangerBtn: React.CSSProperties = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #fecaca",
-    background: "#fff",
-    color: "#b91c1c",
-    cursor: busy ? "not-allowed" : "pointer",
-    fontWeight: 900,
-    fontSize: 13,
-    opacity: busy ? 0.75 : 1,
-  };
-
-  const input: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "10px 12px",
-    outline: "none",
-    fontSize: 14,
-
-  };
-
   if (!user) return null;
 
+  const btnBase =
+    "rounded-2xl bg-white/6 px-3 py-2 text-xs font-semibold ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-50 disabled:hover:bg-white/6";
+  const btnDanger =
+    "rounded-2xl bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-200 ring-1 ring-rose-300/15 hover:bg-rose-500/15 disabled:opacity-50";
+  const btnPrimary =
+    "rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-indigo-500/15 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
+  const inputClass =
+    "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 placeholder:text-white/35 focus:ring-2 focus:ring-sky-400/35";
+
   return (
-    <div style={pageWrap}>
-      <div style={shell}>
-        <div style={{ ...card, paddingBottom: 12 }}>
-          <div style={header}>
-            <div>
-              <div style={{ fontWeight: 900, fontSize: 18 }}>관리자 · 문서 업로드</div>
-              <div style={{ marginTop: 6, color: "#6b7280", fontSize: 12 }}>
-                👤 {user.name} ({user.emp_no}) · 권한: {user.role}
+    <div className="min-h-screen bg-gradient-to-br from-[#0b1220] via-[#0e1628] to-[#0b1220] text-white">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6">
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+              <div className="flex h-full w-full items-center justify-center text-lg font-bold">
+                HR
               </div>
             </div>
-
-            <AdminNav current="docs" />
-
+            <div>
+              <div className="text-sm font-semibold leading-tight">
+                관리자 · 문서 업로드
+              </div>
+              <div className="mt-0.5 text-xs text-white/55">
+                👤 {user.name} ({user.emp_no}) · 권한:{" "}
+                <span className="text-emerald-200">{user.role}</span>
+              </div>
+            </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" }}>
+          {/* ✅ 기존 AdminNav 유지 */}
+          <AdminNav current="docs" />
+        </div>
+
+        {/* Card 1: Upload */}
+        <div className="mt-4 rounded-3xl bg-white/5 p-5 ring-1 ring-white/10 backdrop-blur">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold">파일 업로드</div>
+              <div className="mt-1 text-xs text-white/55">
+                DOCX 업로드 후 자동 분할·저장됩니다.
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
             <input
               type="file"
               multiple
               accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
               disabled={busy}
+              className="block w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white/80 ring-1 ring-white/10 file:mr-4 file:rounded-xl file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white/80 hover:file:bg-white/15"
             />
-            <button onClick={upload} disabled={busy} style={primaryBtn}>
+            <button onClick={upload} disabled={busy} className={btnPrimary}>
               {busy ? "처리 중..." : "업로드"}
             </button>
           </div>
 
           {msg && (
-            <div
-              style={{
-                marginTop: 12,
-                border: "1px solid #e5e7eb",
-                background: "#f9fafb",
-                borderRadius: 12,
-                padding: "10px 12px",
-                fontSize: 13,
-                color: "#374151",
-              }}
-            >
+            <div className="mt-4 rounded-2xl bg-white/6 p-3 text-sm text-white/80 ring-1 ring-white/10">
               {msg}
             </div>
           )}
         </div>
 
-        <div style={{ ...card, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        {/* Card 2: List */}
+        <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur">
+          <div className="flex flex-col gap-3 border-b border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>업로드된 문서</div>
-              <div style={{ marginTop: 4, color: "#6b7280", fontSize: 12 }}>
+              <div className="text-sm font-semibold">업로드된 문서</div>
+              <div className="mt-1 text-xs text-white/55">
                 열기는 PDF/DOCX/이미지 권장 · 한글 파일명도 정상 동작
               </div>
             </div>
 
-            <div style={{ width: 320, maxWidth: "100%" }}>
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="파일명 검색…" style={input} />
+            <div className="w-full sm:w-[320px]">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="파일명 검색…"
+                className={inputClass}
+              />
             </div>
           </div>
 
-          {/* ✅ 체크박스/일괄삭제 컨트롤 */}
-          <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => selectAll(filtered)} disabled={busy || filtered.length === 0} style={btn}>
+          {/* Controls */}
+          <div className="flex flex-wrap items-center gap-2 px-5 py-4">
+            <button
+              onClick={() => selectAll(filtered)}
+              disabled={busy || filtered.length === 0}
+              className={btnBase}
+            >
               전체 선택(검색결과)
             </button>
-            <button onClick={() => clearAll(filtered)} disabled={busy || filtered.length === 0} style={btn}>
+            <button
+              onClick={() => clearAll(filtered)}
+              disabled={busy || filtered.length === 0}
+              className={btnBase}
+            >
               선택 해제(검색결과)
             </button>
             <button
               onClick={() => removeSelected(selectedIds)}
               disabled={busy || selectedIds.length === 0}
-              style={dangerBtn}
+              className={btnDanger}
             >
               선택 삭제 ({selectedIds.length})
             </button>
           </div>
 
-          <div style={{ marginTop: 12, borderTop: "1px solid #f1f5f9" }} />
-
-          {filtered.length === 0 ? (
-            <div style={{ padding: "14px 4px", color: "#6b7280" }}>문서가 없습니다.</div>
-          ) : (
-            <div style={{ marginTop: 4 }}>
-              {filtered.map((d) => (
-                <div
-                  key={d.id}
-                  style={{
-                    padding: "12px 4px",
-                    borderBottom: "1px solid #f3f4f6",
-                    display: "grid",
-                    gridTemplateColumns: "28px 1fr auto",
-                    gap: 10,
-                    alignItems: "start",
-                  }}
-                >
-                  {/* ✅ 체크박스 */}
-                  <div style={{ paddingTop: 2 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!selected[d.id]}
-                      onChange={(e) => setSelected((prev) => ({ ...prev, [d.id]: e.target.checked }))}
-                      disabled={busy}
-                    />
-                  </div>
-
-                  <div>
-                    <div style={{ fontWeight: 900 }}>
-                      {d.filename}
-                      {d.open_url && (
-                        <a
-                          href={d.open_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ marginLeft: 10, fontSize: 13, fontWeight: 900 }}
-                        >
-                          열기
-                        </a>
-                      )}
+          {/* List */}
+          <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+            {filtered.length === 0 ? (
+              <div className="py-6 text-sm text-white/55">문서가 없습니다.</div>
+            ) : (
+              <div className="divide-y divide-white/10">
+                {filtered.map((d) => (
+                  <div
+                    key={d.id}
+                    className="grid grid-cols-[28px_1fr_auto] gap-3 py-4"
+                  >
+                    <div className="pt-1">
+                      <input
+                        type="checkbox"
+                        checked={!!selected[d.id]}
+                        onChange={(e) =>
+                          setSelected((prev) => ({
+                            ...prev,
+                            [d.id]: e.target.checked,
+                          }))
+                        }
+                        disabled={busy}
+                        className="h-4 w-4 accent-sky-400"
+                      />
                     </div>
 
-                    <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                      {new Date(d.created_at).toLocaleString()} · {d.content_type ?? "-"} ·{" "}
-                      {d.size_bytes ? `${d.size_bytes.toLocaleString()} bytes` : "-"}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="truncate font-semibold text-white/90">
+                          {d.filename}
+                        </div>
+                        {d.open_url && (
+                          <a
+                            href={d.open_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-semibold text-sky-200 hover:underline"
+                          >
+                            열기
+                          </a>
+                        )}
+                      </div>
+
+                      <div className="mt-2 text-xs text-white/50">
+                        {new Date(d.created_at).toLocaleString()} ·{" "}
+                        {d.content_type ?? "-"} ·{" "}
+                        {d.size_bytes
+                          ? `${d.size_bytes.toLocaleString()} bytes`
+                          : "-"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-start justify-end">
+                      <button
+                        onClick={() => removeDoc(d.id)}
+                        disabled={busy}
+                        className={btnDanger}
+                      >
+                        삭제
+                      </button>
                     </div>
                   </div>
+                ))}
+              </div>
+            )}
 
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button onClick={() => removeDoc(d.id)} disabled={busy} style={dangerBtn}>
-                      삭제
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="mt-4 text-xs text-white/45">
+              Tip) 데모에서는 문서 수가 많아지면 목록을 “최근 50개”로 제한하는 것도 좋아요.
             </div>
-          )}
-
-          <div style={{ marginTop: 10, fontSize: 12, color: "#9ca3af" }}>
-            Tip) 데모에서는 문서 수가 많아지면 목록을 “최근 50개”로 제한하는 것도 좋아요.
           </div>
         </div>
 
-        <div style={{ textAlign: "center", marginTop: 12, fontSize: 12, color: "#9ca3af" }}>
+        <div className="mt-4 text-center text-xs text-white/45">
           © Covision HR Demo
         </div>
       </div>
     </div>
   );
-
 }

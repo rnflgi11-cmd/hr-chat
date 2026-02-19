@@ -1,9 +1,8 @@
 "use client";
 
 import AdminNav from "@/components/AdminNav";
-
 import { useEffect, useMemo, useState } from "react";
-import { loadSessionUser, clearSessionUser } from "@/lib/auth";
+import { loadSessionUser } from "@/lib/auth";
 
 type UserRow = {
   id: string;
@@ -14,7 +13,11 @@ type UserRow = {
 };
 
 export default function AdminUsersPage() {
-  const user = useMemo(() => (typeof window !== "undefined" ? loadSessionUser() : null), []);
+  const user = useMemo(
+    () => (typeof window !== "undefined" ? loadSessionUser() : null),
+    []
+  );
+
   const [rows, setRows] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -90,7 +93,10 @@ export default function AdminUsersPage() {
     }
   }
 
-  async function updateRow(id: string, patch: Partial<Pick<UserRow, "name" | "role">>) {
+  async function updateRow(
+    id: string,
+    patch: Partial<Pick<UserRow, "name" | "role">>
+  ) {
     setLoading(true);
     setMsg(null);
     try {
@@ -104,153 +110,142 @@ export default function AdminUsersPage() {
     }
   }
 
-  function logout() {
-    clearSessionUser();
-    window.location.href = "/";
-  }
-
-  // ---- UI 스타일(너 문서관리 페이지 톤 맞춤) ----
-  const pageWrap: React.CSSProperties = {
-    minHeight: "100vh",
-    background: "linear-gradient(180deg, #f9fafb 0%, #ffffff 60%, #f9fafb 100%)",
-    padding: 16,
-  };
-  const shell: React.CSSProperties = { maxWidth: 980, margin: "24px auto" };
-  const card: React.CSSProperties = {
-    border: "1px solid #eef2f7",
-    borderRadius: 16,
-    background: "#fff",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.05)",
-    padding: 16,
-  };
-  const header: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingBottom: 12,
-    borderBottom: "1px solid #f1f5f9",
-    marginBottom: 14,
-  };
-  const pill: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    fontSize: 12,
-    color: "#374151",
-    background: "#fff",
-    whiteSpace: "nowrap",
-  };
-  const btn: React.CSSProperties = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 800,
-    fontSize: 13,
-    textDecoration: "none",
-    display: "inline-block",
-  };
-  const primaryBtn: React.CSSProperties = {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #111827",
-    background: "#111827",
-    color: "#fff",
-    cursor: loading ? "not-allowed" : "pointer",
-    fontWeight: 900,
-    opacity: loading ? 0.85 : 1,
-    whiteSpace: "nowrap",
-  };
-  const input: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "10px 12px",
-    outline: "none",
-    fontSize: 14,
-  };
-  const select: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "10px 12px",
-    outline: "none",
-    fontSize: 14,
-    background: "#fff",
-  };
-
   if (!user) return null;
 
+  const inputClass =
+    "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 placeholder:text-white/35 focus:ring-2 focus:ring-sky-400/35";
+  const selectClass =
+    "w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35";
+  const btnBase =
+    "rounded-2xl bg-white/6 px-3 py-2 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/10 disabled:opacity-50";
+  const btnPrimary =
+    "rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-indigo-500/15 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
+
   return (
-    <div style={pageWrap}>
-      <div style={shell}>
-        <div style={card}>
-          <div style={header}>
+    <div className="min-h-screen bg-gradient-to-br from-[#0b1220] via-[#0e1628] to-[#0b1220] text-white">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6">
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+              <div className="flex h-full w-full items-center justify-center text-lg font-bold">
+                HR
+              </div>
+            </div>
             <div>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>관리자 · 사용자 관리</div>
-              <div style={{ marginTop: 4, color: "#6b7280", fontSize: 12 }}>
+              <div className="text-sm font-semibold leading-tight">
+                관리자 · 사용자 관리
+              </div>
+              <div className="mt-0.5 text-xs text-white/55">
                 사번/이름 등록 및 관리자 권한 부여
               </div>
             </div>
-
-         <AdminNav current="users" />
-         
           </div>
 
-          <div style={{ display: "grid", gap: 14 }}>
-            <div style={{ fontWeight: 900 }}>사용자 추가/권한 부여 (Upsert)</div>
+          {/* ✅ 기존 AdminNav 유지 */}
+          <AdminNav current="users" />
+        </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "200px 1fr 160px 120px", gap: 10 }}>
-              <input value={empNo} onChange={(e) => setEmpNo(e.target.value)} placeholder="사번 (예: HR001)" style={input} />
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름" style={input} />
-              <select value={role} onChange={(e) => setRole(e.target.value as any)} style={select}>
-                <option value="user">user</option>
-                <option value="admin">admin</option>
-              </select>
-              <button onClick={upsert} disabled={loading} style={primaryBtn}>
-                {loading ? "처리 중..." : "저장"}
+        {/* Card: Upsert */}
+        <div className="mt-4 rounded-3xl bg-white/5 p-5 ring-1 ring-white/10 backdrop-blur">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold">
+                사용자 추가/권한 부여 (Upsert)
+              </div>
+              <div className="mt-1 text-xs text-white/55">
+                사번/이름 등록 후 권한(user/admin)을 지정합니다.
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-[220px_1fr_180px_120px]">
+            <input
+              value={empNo}
+              onChange={(e) => setEmpNo(e.target.value)}
+              placeholder="사번 (예: HR001)"
+              className={inputClass}
+              disabled={loading}
+            />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="이름"
+              className={inputClass}
+              disabled={loading}
+            />
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as any)}
+              className={selectClass}
+              disabled={loading}
+            >
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+            <button onClick={upsert} disabled={loading} className={btnPrimary}>
+              {loading ? "처리 중..." : "저장"}
+            </button>
+          </div>
+
+          {msg && (
+            <div className="mt-4 rounded-2xl bg-white/6 p-3 text-sm text-white/80 ring-1 ring-white/10">
+              {msg}
+            </div>
+          )}
+        </div>
+
+        {/* Card: List */}
+        <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur">
+          <div className="flex flex-col gap-3 border-b border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm font-semibold">사용자 목록</div>
+
+            <div className="flex w-full gap-2 sm:w-[460px]">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="사번/이름 검색"
+                className={inputClass}
+                disabled={loading}
+              />
+              <button
+                onClick={() => refresh()}
+                disabled={loading}
+                className={btnBase}
+              >
+                검색
               </button>
             </div>
+          </div>
 
-            {msg && (
-              <div style={{ border: "1px solid #e5e7eb", background: "#f9fafb", borderRadius: 12, padding: "10px 12px", fontSize: 13 }}>
-                {msg}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-              <div style={{ fontWeight: 900 }}>사용자 목록</div>
-              <div style={{ display: "flex", gap: 8, width: 420, maxWidth: "100%" }}>
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="사번/이름 검색" style={input} />
-                <button onClick={() => refresh()} disabled={loading} style={btn}>검색</button>
-              </div>
-            </div>
-
-            <div style={{ borderTop: "1px solid #f1f5f9" }} />
-
+          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
             {rows.length === 0 ? (
-              <div style={{ color: "#6b7280", padding: "10px 2px" }}>
+              <div className="py-4 text-sm text-white/55">
                 {loading ? "불러오는 중..." : "표시할 사용자가 없습니다."}
               </div>
             ) : (
-              <div style={{ display: "grid" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 160px 120px", gap: 10, padding: "10px 4px", color: "#6b7280", fontSize: 12 }}>
-                  <div>사번</div><div>이름</div><div>권한</div><div>작업</div>
+              <div className="overflow-hidden rounded-2xl ring-1 ring-white/10">
+                {/* header row */}
+                <div className="grid grid-cols-[180px_1fr_160px_120px] gap-3 bg-white/5 px-4 py-3 text-xs text-white/55">
+                  <div>사번</div>
+                  <div>이름</div>
+                  <div>권한</div>
+                  <div>작업</div>
                 </div>
 
-                {rows.map((r) => (
-                  <Row key={r.id} r={r} loading={loading} onSave={updateRow} />
-                ))}
+                <div className="divide-y divide-white/10 bg-white/2">
+                  {rows.map((r) => (
+                    <Row key={r.id} r={r} loading={loading} onSave={updateRow} />
+                  ))}
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        <div style={{ textAlign: "center", marginTop: 12, fontSize: 12, color: "#9ca3af" }}>© Covision HR Demo</div>
+        <div className="mt-4 text-center text-xs text-white/45">
+          © Covision HR Demo
+        </div>
       </div>
     </div>
   );
@@ -269,44 +264,40 @@ function Row({
   const [role, setRole] = useState<UserRow["role"]>(r.role);
   const dirty = name.trim() !== r.name || role !== r.role;
 
-  const input: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "10px 12px",
-    outline: "none",
-    fontSize: 14,
-  };
-  const select: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "10px 12px",
-    outline: "none",
-    fontSize: 14,
-    background: "#fff",
-  };
-  const btn: React.CSSProperties = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: dirty ? "1px solid #111827" : "1px solid #e5e7eb",
-    background: dirty ? "#111827" : "#fff",
-    color: dirty ? "#fff" : "#111827",
-    cursor: loading ? "not-allowed" : dirty ? "pointer" : "default",
-    fontWeight: 900,
-    fontSize: 13,
-    opacity: loading ? 0.75 : 1,
-  };
+  const inputClass =
+    "w-full rounded-2xl bg-white/5 px-4 py-2.5 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 disabled:opacity-60";
+  const selectClass =
+    "w-full rounded-2xl bg-white/5 px-4 py-2.5 text-sm text-white outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-400/35 disabled:opacity-60";
+  const btn = [
+    "rounded-2xl px-3 py-2 text-xs font-semibold ring-1 transition disabled:opacity-50",
+    dirty
+      ? "bg-gradient-to-r from-indigo-500 to-sky-500 text-white ring-white/10 hover:brightness-110"
+      : "bg-white/6 text-white/70 ring-white/10",
+  ].join(" ");
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 160px 120px", gap: 10, padding: "10px 4px", borderTop: "1px solid #f3f4f6", alignItems: "center" }}>
-      <div style={{ fontWeight: 900 }}>{r.emp_no}</div>
-      <input value={name} onChange={(e) => setName(e.target.value)} style={input} disabled={loading} />
-      <select value={role} onChange={(e) => setRole(e.target.value as any)} style={select} disabled={loading}>
+    <div className="grid grid-cols-[180px_1fr_160px_120px] gap-3 px-4 py-3 items-center">
+      <div className="truncate font-semibold text-white/90">{r.emp_no}</div>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className={inputClass}
+        disabled={loading}
+      />
+      <select
+        value={role}
+        onChange={(e) => setRole(e.target.value as any)}
+        className={selectClass}
+        disabled={loading}
+      >
         <option value="user">user</option>
         <option value="admin">admin</option>
       </select>
-      <button disabled={!dirty || loading} style={btn} onClick={() => onSave(r.id, { name: name.trim(), role })}>
+      <button
+        disabled={!dirty || loading}
+        className={btn}
+        onClick={() => onSave(r.id, { name: name.trim(), role })}
+      >
         저장
       </button>
     </div>
