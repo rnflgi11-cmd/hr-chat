@@ -1,19 +1,24 @@
+// src/lib/auth.ts
 export type SessionUser = {
-  id: string;
-  emp_no: string;
+  role: string;
+  empNo: string;
   name: string;
-  role: "user" | "admin";
+  // 필요하면 role 같은 것도 나중에 추가 가능
+  // role?: "HR" | "EMP";
 };
 
-const KEY = "covision_hr_session_user";
+const KEY = "hrgpt_session_user";
 
-export function saveSessionUser(u: SessionUser) {
-  localStorage.setItem(KEY, JSON.stringify(u));
+export function saveSessionUser(user: SessionUser) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(KEY, JSON.stringify(user));
 }
 
-export function loadSessionUser(): SessionUser | null {
+export function getSessionUser(): SessionUser | null {
+  if (typeof window === "undefined") return null;
   const raw = localStorage.getItem(KEY);
   if (!raw) return null;
+
   try {
     return JSON.parse(raw) as SessionUser;
   } catch {
@@ -22,5 +27,6 @@ export function loadSessionUser(): SessionUser | null {
 }
 
 export function clearSessionUser() {
+  if (typeof window === "undefined") return;
   localStorage.removeItem(KEY);
 }

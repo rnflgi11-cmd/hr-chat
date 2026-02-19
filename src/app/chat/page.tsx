@@ -1,359 +1,298 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { clearSessionUser, loadSessionUser } from "@/lib/auth";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getSessionUser, clearSessionUser } from "@/lib/auth";
 
-type UserMsg = { role: "user"; content: string; ts: number };
-
-type Chunk = {
+type SourceDoc = {
   filename: string;
-  chunk_index: number;
-  content: string;
-  sim?: number;
+  open_url?: string;
+  chunk_index?: number;
+  snippet?: string;
 };
-
-type AssistantMsg = {
-  role: "assistant";
-  ts: number;
-  intent?: "A" | "B" | "C";
-  chunks?: Chunk[];
-  content?: string; // fallback 등
-};
-
-type Msg = UserMsg | AssistantMsg;
 
 type AnswerResponse = {
-  intent?: "A" | "B" | "C";
-  chunks?: Chunk[];
-  answer?: string | null;
-  diag?: string;
-  error?: string;
+  answer: string;
+  sources?: SourceDoc[];
 };
 
-function ChunkCard({ c }: { c: Chunk }) {
-  const [open, setOpen] = useState(false);
-  const cleaned = (c.content ?? "").replace(/\n{3,}/g, "\n\n").trim();
-
-  return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 14,
-        padding: 12,
-        background: "#fafafa",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-        <div style={{ fontWeight: 900, fontSize: 13, color: "#111827" }}>
-          {c.filename} / 조각 {c.chunk_index}
-        </div>
-
-        <button
-          onClick={() => setOpen((v) => !v)}
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 999,
-            padding: "6px 10px",
-            background: "#fff",
-            fontWeight: 900,
-            fontSize: 12,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {open ? "접기" : "원문 보기"}
-        </button>
-      </div>
-
-      {!open ? (
-        <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-          원문은 접혀있어요. 필요할 때 “원문 보기”를 눌러 확인해 주세요.
-        </div>
-      ) : (
-        <pre
-          style={{
-            marginTop: 10,
-            whiteSpace: "pre-wrap",
-            lineHeight: 1.55,
-            fontSize: 13,
-            color: "#111827",
-          }}
-        >
-          {cleaned}
-        </pre>
-      )}
-    </div>
-  );
-}
+type Msg = {
+  role: "user" | "assistant";
+  content: string;
+  sources?: SourceDoc[];
+};
 
 export default function ChatPage() {
-  const user = useMemo(() => (typeof window !== "undefined" ? loadSessionUser() : null), []);
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [me, setMe] = useState<{ empNo: string; name: string } | null>(null);
   const [q, setQ] = useState("");
-  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Msg[]>([
+    {
+      role: "assistant",
+      content:
+        "안녕하세요! HR 규정 챗봇입니다.\n\n아래 예시로 질문해 보세요:\n- 경조휴가 며칠이야?\n- 기타휴가 종류 알려줘\n- 프로젝트 수당 기준이 뭐야?\n- 증명서 발급은 어떻게 해?",
+    },
+  ]);
+  const [showSources, setShowSources] = useState(true);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!user) window.location.href = "/";
-  }, [user]);
+    const u = getSessionUser?.();
+    if (!u) {
+      window.location.href = "/";
+      return;
+    }
+    setMe(u);
+  }, []);
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [messages, loading]);
+
+  const canSend = useMemo(() => q.trim().length > 0 && !loading, [q, loading]);
 
   async function send() {
-    const text = q.trim();
-    if (!text || sending || !user) return;
+    if (!canSend) return;
+    setErr(null);
 
-    const next: Msg[] = [...messages, { role: "user", content: text, ts: Date.now() }];
-    setMessages(next);
+    const userMsg: Msg = { role: "user", content: q.trim() };
+    setMessages((prev) => [...prev, userMsg]);
     setQ("");
-    setSending(true);
+    setLoading(true);
 
     try {
       const res = await fetch("/api/answer", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: text, user }),
+        body: JSON.stringify({
+          question: userMsg.content,
+        }),
       });
+      const json: AnswerResponse = await res.json();
+      if (!res.ok) throw new Error((json as any)?.error ?? "답변 생성 실패");
 
-      const json = (await res.json()) as AnswerResponse;
-
-      if (!res.ok) {
-        setMessages([
-          ...next,
-          { role: "assistant", content: json.error ?? "오류가 발생했어요.", ts: Date.now() },
-        ]);
-        return;
-      }
-
-      const chunks = json.chunks ?? [];
-      const fallbackText =
-        json.answer ??
-        (chunks.length === 0
-          ? "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다."
-          : "");
-
-      setMessages([
-        ...next,
+      setMessages((prev) => [
+        ...prev,
         {
           role: "assistant",
-          ts: Date.now(),
-          intent: json.intent ?? "C",
-          chunks: chunks.length ? chunks : undefined,
-          content: chunks.length ? undefined : `${fallbackText}`,
+          content: json.answer ?? "(답변 없음)",
+          sources: json.sources ?? [],
         },
       ]);
-    } catch {
-      setMessages([...next, { role: "assistant", content: "네트워크 오류가 발생했어요.", ts: Date.now() }]);
+    } catch (e: any) {
+      setErr(e?.message ?? "오류가 발생했습니다.");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "죄송합니다. 현재 답변 생성 중 오류가 발생했습니다.\n잠시 후 다시 시도해 주세요.",
+        },
+      ]);
     } finally {
-      setSending(false);
+      setLoading(false);
     }
   }
 
-  function logout() {
-    clearSessionUser();
+  function onLogout() {
+    clearSessionUser?.();
     window.location.href = "/";
   }
 
-  const pageWrap: React.CSSProperties = {
-    minHeight: "100vh",
-    background: "linear-gradient(180deg, #f9fafb 0%, #ffffff 60%, #f9fafb 100%)",
-    padding: 16,
-  };
-
-  const shell: React.CSSProperties = { maxWidth: 980, margin: "24px auto" };
-
-  const card: React.CSSProperties = {
-    border: "1px solid #eef2f7",
-    borderRadius: 16,
-    background: "#fff",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.05)",
-  };
-
-  const header: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "14px 16px",
-    borderBottom: "1px solid #f1f5f9",
-  };
-
-  const pill: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    fontSize: 12,
-    color: "#374151",
-    background: "#fff",
-    whiteSpace: "nowrap",
-  };
-
-  const btn: React.CSSProperties = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 13,
-    textDecoration: "none",
-    display: "inline-block",
-  };
-
-  const primaryBtn: React.CSSProperties = {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #111827",
-    background: "#111827",
-    color: "#fff",
-    cursor: sending ? "not-allowed" : "pointer",
-    fontWeight: 900,
-    opacity: sending ? 0.85 : 1,
-    whiteSpace: "nowrap",
-  };
-
-  const input: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    padding: "12px 12px",
-    outline: "none",
-    fontSize: 14,
-  };
-
-  const chatArea: React.CSSProperties = {
-    padding: 14,
-    height: "calc(100vh - 230px)",
-    minHeight: 420,
-    overflow: "auto",
-  };
-
-  const footer: React.CSSProperties = {
-    padding: 12,
-    borderTop: "1px solid #f1f5f9",
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-end",
-  };
-
-  const bubbleBase: React.CSSProperties = {
-    maxWidth: "82%",
-    padding: "10px 12px",
-    borderRadius: 14,
-    whiteSpace: "pre-wrap",
-    lineHeight: 1.45,
-    fontSize: 14,
-  };
-
-  if (!user) return null;
-
   return (
-    <div style={pageWrap}>
-      <div style={shell}>
-        <div style={card}>
-          <div style={header}>
-            <div>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>코비전 HR 규정 챗봇</div>
-              <div style={{ marginTop: 4, color: "#6b7280", fontSize: 12 }}>
-                근거 원문 기반(무료 검색형)
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={pill}>
-                👤 {user.name} · {user.emp_no} · {user.role}
-              </div>
-
-              {user.role === "admin" && (
-  <>
-    <a href="/admin" style={btn}>
-      문서관리
-    </a>
-    <a href="/admin/users" style={btn}>
-      사용자관리
-    </a>
-  </>
-)}
-
-              <button onClick={logout} style={btn}>
-                로그아웃
-              </button>
+    <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6">
+      {/* Top bar */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+            <div className="flex h-full w-full items-center justify-center text-lg font-bold">
+              HR
             </div>
           </div>
-
-          <div style={chatArea}>
-            {messages.length === 0 ? (
-              <div style={{ color: "#6b7280", fontSize: 14 }}>
-                예: <b>“화환 신청 절차 알려줘”</b>, <b>“경조휴가 며칠이야?”</b>
-              </div>
-            ) : (
-              messages.map((m, idx) => {
-                const isUser = m.role === "user";
-                return (
-                  <div
-                    key={(m as any).ts + "_" + idx}
-                    style={{
-                      display: "flex",
-                      justifyContent: isUser ? "flex-end" : "flex-start",
-                      margin: "10px 0",
-                    }}
-                  >
-                    <div
-                      style={{
-                        ...bubbleBase,
-                        background: isUser ? "#111827" : "#f3f4f6",
-                        color: isUser ? "#fff" : "#111827",
-                        border: isUser ? "1px solid #111827" : "1px solid #e5e7eb",
-                      }}
-                    >
-                      {m.role === "assistant" ? (
-  <div style={{ display: "grid", gap: 10 }}>
-    {/* 의도(intent) 표시 숨김 */}
-
-    {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
-
-    {m.chunks && m.chunks.length > 0 && (
-      <>
-        <div style={{ fontSize: 13, fontWeight: 900 }}>관련 규정 원문</div>
-        <div style={{ display: "grid", gap: 10 }}>
-          {m.chunks.map((c, i) => (
-            <ChunkCard key={`${c.filename}-${c.chunk_index}-${i}`} c={c} />
-          ))}
+          <div>
+            <div className="text-sm font-semibold leading-tight">
+              코비전 HR 규정 챗봇
+            </div>
+            <div className="text-xs text-white/55">
+              {me ? `${me.name} (${me.empNo})` : "로그인 확인 중…"} · 접근 권한:{" "}
+              <span className="text-emerald-200">HR</span>
+            </div>
+          </div>
         </div>
-      </>
-    )}
-  </div>
-) : (
-  m.content
-)}
 
-                    </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowSources((v) => !v)}
+            className="rounded-2xl bg-white/6 px-3 py-2 text-xs text-white/80 ring-1 ring-white/10 hover:bg-white/10"
+          >
+            출처 {showSources ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={onLogout}
+            className="rounded-2xl bg-white/6 px-3 py-2 text-xs text-white/80 ring-1 ring-white/10 hover:bg-white/10"
+          >
+            로그아웃
+          </button>
+        </div>
+      </div>
+
+      {/* Install hint */}
+      <InstallHint />
+
+      {/* Chat box */}
+      <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+          <div className="text-sm font-semibold">대화</div>
+          <div className="text-xs text-white/55">
+            규정 문서 기반 답변 · 출처 제공
+          </div>
+        </div>
+
+        <div
+          ref={listRef}
+          className="min-h-0 flex-1 overflow-auto px-5 py-5"
+        >
+          <div className="space-y-4">
+            {messages.map((m, idx) => (
+              <Bubble key={idx} msg={m} showSources={showSources} />
+            ))}
+
+            {loading && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] rounded-3xl bg-white/6 px-4 py-3 text-sm text-white/80 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white/80" />
+                    답변 생성 중…
                   </div>
-                );
-              })
+                </div>
+              </div>
             )}
           </div>
+        </div>
 
-          <div style={footer}>
-            <textarea
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              placeholder="질문을 입력하세요 (Enter 전송 / Shift+Enter 줄바꿈)"
-              style={{ ...input, minHeight: 44, height: 44, resize: "none" }}
-            />
-            <button onClick={send} disabled={sending} style={primaryBtn}>
-              {sending ? "검색 중..." : "전송"}
+        {/* Error */}
+        {err && (
+          <div className="px-5 pb-3">
+            <div className="rounded-2xl bg-rose-500/10 p-3 text-sm text-rose-200 ring-1 ring-rose-300/15">
+              {err}
+            </div>
+          </div>
+        )}
+
+        {/* Composer */}
+        <div className="border-t border-white/10 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex-1">
+              <textarea
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") send();
+                }}
+                placeholder="질문을 입력하세요. (Ctrl/⌘ + Enter로 전송)"
+                className="h-[52px] w-full resize-none rounded-2xl bg-white/5 px-4 py-3 text-sm text-white outline-none ring-1 ring-white/10 placeholder:text-white/35 focus:ring-2 focus:ring-sky-400/35"
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {[
+                  "경조휴가 며칠이야?",
+                  "기타휴가 종류 알려줘",
+                  "프로젝트 수당 기준 알려줘",
+                  "증명서 발급은 어떻게 해?",
+                ].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setQ(t)}
+                    className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={send}
+              disabled={!canSend}
+              className="h-[52px] rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 transition hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100"
+            >
+              전송
             </button>
           </div>
         </div>
+      </div>
 
-        <div style={{ textAlign: "center", marginTop: 12, fontSize: 12, color: "#9ca3af" }}>
-          © Covision HR Demo
+      <div className="mt-4 text-center text-xs text-white/45">
+        © Covision Internal · HR Policy Assistant
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ msg, showSources }: { msg: Msg; showSources: boolean }) {
+  const isUser = msg.role === "user";
+
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className="max-w-[85%] space-y-2">
+        <div
+          className={[
+            "rounded-3xl px-4 py-3 text-sm leading-relaxed ring-1",
+            isUser
+              ? "bg-gradient-to-r from-indigo-500/90 to-sky-500/90 text-white ring-white/10"
+              : "bg-white/6 text-white/90 ring-white/10",
+          ].join(" ")}
+          style={{ whiteSpace: "pre-wrap" }}
+        >
+          {msg.content}
+        </div>
+
+        {!isUser && showSources && msg.sources && msg.sources.length > 0 && (
+          <div className="rounded-2xl bg-white/4 p-3 text-xs text-white/70 ring-1 ring-white/10">
+            <div className="mb-2 font-semibold text-white/75">근거(출처)</div>
+            <ul className="space-y-1">
+              {msg.sources.slice(0, 5).map((s, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white/6 px-2 py-0.5 ring-1 ring-white/10">
+                    {s.filename}
+                  </span>
+                  {typeof s.chunk_index === "number" && (
+                    <span className="text-white/50"># {s.chunk_index}</span>
+                  )}
+                  {s.open_url && (
+                    <a
+                      href={s.open_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-200 hover:underline"
+                    >
+                      열기
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InstallHint() {
+  // 데모용: 과하게 안내하지 않고 “제품 느낌”만 주는 가벼운 배너
+  return (
+    <div className="mt-4 rounded-3xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-semibold">앱처럼 설치해서 사용하기</div>
+          <div className="text-xs text-white/60">
+            브라우저 메뉴에서 “홈 화면에 추가”를 선택하면 앱처럼 빠르게 사용할 수
+            있어요.
+          </div>
+        </div>
+        <div className="text-xs text-white/55">
+          Tip: 외부 시연 시 전체화면(PWA)로 열면 더 멋있게 보여요.
         </div>
       </div>
     </div>

@@ -1,9 +1,8 @@
 "use client";
 
 import AdminNav from "@/components/AdminNav";
-
-import { useEffect, useMemo, useState } from "react";
-import { loadSessionUser, clearSessionUser } from "@/lib/auth";
+import { useEffect, useState } from "react";
+import { getSessionUser, clearSessionUser } from "@/lib/auth";
 
 type UserRow = {
   id: string;
@@ -14,7 +13,8 @@ type UserRow = {
 };
 
 export default function AdminUsersPage() {
-  const user = useMemo(() => (typeof window !== "undefined" ? loadSessionUser() : null), []);
+  const [user, setUser] = useState<ReturnType<typeof getSessionUser>>(null);
+
   const [rows, setRows] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -26,27 +26,32 @@ export default function AdminUsersPage() {
   const [name, setName] = useState("");
   const [role, setRole] = useState<"admin" | "user">("user");
 
+  // 1) 세션 읽기
   useEffect(() => {
-    if (!user) {
-      window.location.href = "/";
-      return;
-    }
-    if (user.role !== "admin") {
+    setUser(getSessionUser());
+  }, []);
+
+  // 2) 권한 체크 + 초기 로딩
+  useEffect(() => {
+    if (!user) return;
+
+    if ((user.role ?? "user") !== "admin") {
       window.location.href = "/chat";
       return;
     }
+
     refresh("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user]);
 
   async function post(body: any) {
+    if (!user) throw new Error("세션이 없습니다. 다시 로그인해 주세요.");
     const res = await fetch("/api/admin/users", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...body, user }),
     });
 
-    // ✅ JSON 파싱 안전하게 (빈 응답/에러 응답 대비)
     const text = await res.text();
     const json = text ? JSON.parse(text) : {};
     if (!res.ok) throw new Error(json.error ?? `요청 실패 (${res.status})`);
@@ -109,7 +114,7 @@ export default function AdminUsersPage() {
     window.location.href = "/";
   }
 
-  // ---- UI 스타일(너 문서관리 페이지 톤 맞춤) ----
+  // ---- UI 스타일 ----
   const pageWrap: React.CSSProperties = {
     minHeight: "100vh",
     background: "linear-gradient(180deg, #f9fafb 0%, #ffffff 60%, #f9fafb 100%)",
@@ -130,18 +135,6 @@ export default function AdminUsersPage() {
     paddingBottom: 12,
     borderBottom: "1px solid #f1f5f9",
     marginBottom: 14,
-  };
-  const pill: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    fontSize: 12,
-    color: "#374151",
-    background: "#fff",
-    whiteSpace: "nowrap",
   };
   const btn: React.CSSProperties = {
     padding: "8px 10px",
@@ -168,22 +161,37 @@ export default function AdminUsersPage() {
   const input: React.CSSProperties = {
     width: "100%",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
     padding: "10px 12px",
-    outline: "none",
     fontSize: 14,
   };
   const select: React.CSSProperties = {
     width: "100%",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
     padding: "10px 12px",
-    outline: "none",
     fontSize: 14,
     background: "#fff",
   };
 
-  if (!user) return null;
+  // 세션 로딩 전
+  if (!user) {
+    return (
+      <div style={pageWrap}>
+        <div style={shell}>
+          <div style={card}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>세션 확인 중...</div>
+            <div style={{ color: "#6b7280", fontSize: 13 }}>
+              로그인 정보가 없으면 로그인 화면으로 이동합니다.
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <button style={btn} onClick={() => (window.location.href = "/")}>
+                로그인 화면으로
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageWrap}>
@@ -195,10 +203,17 @@ export default function AdminUsersPage() {
               <div style={{ marginTop: 4, color: "#6b7280", fontSize: 12 }}>
                 사번/이름 등록 및 관리자 권한 부여
               </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                로그인: {user.name} ({user.empNo}) · role: {user.role ?? "user"}
+              </div>
             </div>
 
-         <AdminNav current="users" />
-         
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <AdminNav current="users" />
+              <button style={btn} onClick={logout}>
+                로그아웃
+              </button>
+            </div>
           </div>
 
           <div style={{ display: "grid", gap: 14 }}>
@@ -272,17 +287,13 @@ function Row({
   const input: React.CSSProperties = {
     width: "100%",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
     padding: "10px 12px",
-    outline: "none",
     fontSize: 14,
   };
   const select: React.CSSProperties = {
     width: "100%",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
     padding: "10px 12px",
-    outline: "none",
     fontSize: 14,
     background: "#fff",
   };

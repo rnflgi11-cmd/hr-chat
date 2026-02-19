@@ -3,7 +3,7 @@
 import AdminNav from "@/components/AdminNav";
 
 import { useEffect, useMemo, useState } from "react";
-import { loadSessionUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 
 type Doc = {
   id: string;
@@ -16,7 +16,7 @@ type Doc = {
 };
 
 export default function AdminPage() {
-  const user = useMemo(() => (typeof window !== "undefined" ? loadSessionUser() : null), []);
+  const user = useMemo(() => (typeof window !== "undefined" ? getSessionUser() : null), []);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
@@ -235,9 +235,9 @@ export default function AdminPage() {
   const input: React.CSSProperties = {
     width: "100%",
     borderRadius: 12,
-    border: "1px solid #e5e7eb",
+
     padding: "10px 12px",
-    outline: "none",
+
     fontSize: 14,
 
   };
@@ -252,7 +252,7 @@ export default function AdminPage() {
             <div>
               <div style={{ fontWeight: 900, fontSize: 18 }}>관리자 · 문서 업로드</div>
               <div style={{ marginTop: 6, color: "#6b7280", fontSize: 12 }}>
-                👤 {user.name} ({user.emp_no}) · 권한: {user.role}
+                👤 {user.name} ({user.empNo}) · 권한: {user.role}
               </div>
             </div>
 

@@ -1,0 +1,8 @@
+{
+  "name": "코비전 HR 규정 챗봇",
+  "short_name": "HR GPT",
+  "start_url": "/chat",
+  "display": "standalone",
+  "background_color": "#05070d",
+  "theme_color": "#0b1220"
+}
