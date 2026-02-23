@@ -30,13 +30,9 @@ type DocumentMeta = { id: string; filename: string | null };
 
 type Routed = {
   intent: Intent;
-  /** filename ilike 힌트(복수) */
   filenameHints: string[];
-  /** 검색 토큰 */
   tokens: string[];
-  /** 최종 출력에서 남길 핵심 키워드(없으면 필터링 약하게) */
   mustContainAny?: string[];
-  /** 휴가규정(13번) 같은 "대형 문서"에서 섹션을 좁힐 때 쓰는 헤더 */
   sectionHeader?: string | null;
 };
 
@@ -48,8 +44,11 @@ const FALLBACK =
  * ---------------------------- */
 const SEARCH_MATCH_COUNT = 40;
 const SEARCH_MIN_SIM = 0.1;
-const WINDOW = 2; // anchor 기준 앞뒤 조각 개수
+const WINDOW = 2;
 const MAX_TOKENS = 16;
+
+// ✅ 표가 길 때만 안전장치 (원하면 999로 늘려도 됨)
+const MAX_TABLE_ROWS = 80;
 
 /** -----------------------------
  * Supabase
@@ -81,18 +80,14 @@ function hasAny(sl: string, kws: string[]) {
 }
 
 /** -----------------------------
- * Routing (핵심)
- *  - 업로드된 파일들이 "주제별 분리"되어 있으니
- *    질문을 토픽으로 라우팅해서 후보 문서(1~3개)만 검색한다.
+ * Routing
  * ---------------------------- */
 function routeQuestion(q: string): Routed {
   const s = normalize(q);
   const sl = safeLower(s);
 
-  // ----- Intent 기본값
   let intent: Intent = "C";
 
-  // ----- 토큰 기본
   const baseTokens = normalize(q)
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
@@ -100,7 +95,6 @@ function routeQuestion(q: string): Routed {
     .split(" ")
     .filter((w) => w.length >= 2);
 
-  // ----- 돈 질문 감지
   const isAnnualAllowance =
     sl.includes("연차") &&
     (sl.includes("수당") || sl.includes("정산") || sl.includes("지급") || sl.includes("얼마") || sl.includes("계산"));
@@ -112,21 +106,6 @@ function routeQuestion(q: string): Routed {
     sl.includes("조의금") ||
     (sl.includes("경조") && (sl.includes("금") || sl.includes("얼마") || sl.includes("지급") || sl.includes("금액")));
 
-  // ----- 각 토픽 라우팅 (파일명 기반)
-  // 업로드된 실제 문서 기준:
-  // - 3_경조금지급기준.docx: 경조금 금액/기준/신청/지급일 등 :contentReference[oaicite:1]{index=1}
-  // - 7_연차수당지급기준.docx: 연차수당 계산/대상/시기 :contentReference[oaicite:2]{index=2}
-  // - 10_프로젝트 수당제도.docx: 프로젝트 수당 기준/예시/지급 :contentReference[oaicite:3]{index=3}
-  // - 11_휴일근무 수당.docx: 휴일근무 수당 금액/시간/신청 :contentReference[oaicite:4]{index=4}
-  // - 9_근무off제도 매뉴얼.docx: 심야 근무 OFF :contentReference[oaicite:5]{index=5}
-  // - 12_화환신청.docx: 화환 신청 절차 :contentReference[oaicite:6]{index=6}
-  // - 8_제증명서 발급 안내.docx: 재직/경력 증명 :contentReference[oaicite:7]{index=7}
-  // - 5_선택적 복리후생 제도.docx: 복리후생/즐기GO/공부하GO/건강챙기GO :contentReference[oaicite:8]{index=8}
-  // - 1_안식년_휴가.docx: 안식년 휴가 기준/절차 :contentReference[oaicite:9]{index=9}
-  // - 2_자산 및 장비 지급 기준.docx: 노트북/모니터 지급/교체 :contentReference[oaicite:10]{index=10}
-  // - 13_휴가규정(연차,경조,공가).docx: 연차/경조휴가/기타휴가 :contentReference[oaicite:11]{index=11}
-
-  // 0) 경조금(돈) 최우선
   if (isCondolenceMoney) {
     intent = "C";
     return {
@@ -137,7 +116,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 1) 연차수당(돈)
   if (isAnnualAllowance || hasAny(sl, ["연차수당", "연차비", "미사용", "정산"])) {
     intent = "B";
     return {
@@ -148,7 +126,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 2) 프로젝트 수당
   if (hasAny(sl, ["프로젝트", "상주", "pm팀", "개발자"]) && hasAny(sl, ["수당", "지급", "기준", "청구", "신청", "예시"])) {
     intent = "C";
     return {
@@ -159,7 +136,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 3) 휴일근무 수당
+  
   if (hasAny(sl, ["휴일근무", "공휴일", "토요일", "일요일"]) && hasAny(sl, ["수당", "지급", "금액", "계산", "신청"])) {
     intent = "C";
     return {
@@ -170,7 +147,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 4) 근무 OFF (심야)
+
   if (hasAny(sl, ["근무off", "근무 off", "오프", "off", "심야", "야근"]) && hasAny(sl, ["신청", "기준", "사용", "대상"])) {
     intent = "C";
     return {
@@ -181,7 +158,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 5) 화환 신청
   if (hasAny(sl, ["화환"])) {
     intent = "C";
     return {
@@ -192,7 +168,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 6) 제증명서
   if (hasAny(sl, ["제증명", "증명서", "재직", "경력", "원천징수", "근로소득"])) {
     intent = "C";
     return {
@@ -203,8 +178,24 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 7) 선택적 복리후생
-  if (hasAny(sl, ["복리후생", "즐기go", "공부하go", "건강챙기go", "ott", "여행", "문화", "테마파크", "레포츠", "운동", "헬스", "검진", "chatgpt", "gemini"])) {
+  if (
+    hasAny(sl, [
+      "복리후생",
+      "즐기go",
+      "공부하go",
+      "건강챙기go",
+      "ott",
+      "여행",
+      "문화",
+      "테마파크",
+      "레포츠",
+      "운동",
+      "헬스",
+      "검진",
+      "chatgpt",
+      "gemini",
+    ])
+  ) {
     intent = "C";
     return {
       intent,
@@ -214,7 +205,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 8) 안식년 휴가
   if (hasAny(sl, ["안식년", "장기근속", "포상"])) {
     intent = "C";
     return {
@@ -225,7 +215,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 9) 자산/장비(노트북/모니터)
   if (hasAny(sl, ["노트북", "모니터", "데스크탑", "장비", "자산", "고장", "교체"])) {
     intent = "C";
     return {
@@ -236,7 +225,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 10) 인재추천 포상
   if (hasAny(sl, ["인재추천", "추천", "포상", "채용추천"])) {
     intent = "C";
     return {
@@ -247,8 +235,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 11) 휴가규정(연차/경조휴가/기타휴가)
-  // 연차/경조/공가/민방위/예비군/병가 등은 13번 문서로 라우팅
   if (hasAny(sl, ["연차", "반차", "시간연차", "이월", "차감", "선연차"])) {
     intent = "A";
     return {
@@ -282,7 +268,6 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  // 디폴트: 전체 검색 (하지만 file hint는 약하게)
   return {
     intent,
     filenameHints: [],
@@ -291,7 +276,7 @@ function routeQuestion(q: string): Routed {
 }
 
 /** -----------------------------
- * Doc ID lookup by filename hints
+ * Doc ID lookup
  * ---------------------------- */
 async function findDocIdsByFilenameHints(
   supabaseAdmin: SupabaseClient,
@@ -318,7 +303,8 @@ async function findDocIdsByFilenameHints(
 }
 
 /** -----------------------------
- * 표 복원 + 클린 (네 기존 로직 유지)
+ * 표 복원 + 클린
+ * ✅ 변경점: 코드펜스(```text) 제거하고 "마크다운 표"로만 출력
  * ---------------------------- */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
@@ -425,7 +411,7 @@ function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable:
       ...rows.map((r) => `| ${r.map((c) => c.replace(/\|/g, "｜").replace(/\n/g, " ")).join(" | ")} |`),
     ];
 
-    return { md: "```text\n" + mdLines.join("\n") + "\n```", consumedUntil: i, hasTable: true };
+    return { md: mdLines.join("\n"), consumedUntil: i, hasTable: true };
   }
 
   const out: string[] = [];
@@ -460,18 +446,74 @@ function cleanText(t: string) {
     .replace(/\[BUILD_MARK_[^\]]+\]/g, "")
     .replace(/분류[\s\S]*?의도\s*[ABC]\s*/g, "")
     .replace(/^\[[^\]]+\/\s*조각\s*\d+\]$/gm, "")
+    .replace(/```text\s*/g, "")
+    .replace(/```\s*/g, "")
+    .replace(/─{5,}/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
 function formatChunkContent(content: string): { text: string; hasTable: boolean } {
   const rebuilt = rebuildFlatTableWithContext(content);
-  const hasTable = rebuilt.hasTable || /```text[\s\S]*\|[\s\S]*```/m.test(content ?? "");
+  const hasTable = rebuilt.hasTable || /\|\s*---\s*\|/.test(content ?? "");
   return { text: (rebuilt.rebuilt || content || "").trim(), hasTable };
 }
 
 /** -----------------------------
- * Scoring (문서 내 검색 결과용)
+ * 발췌 정책(LLM 없이 AI처럼 보이게)
+ * ✅ 핵심: 표는 "절대 발췌/자르지 않고" 전체 유지
+ *         텍스트만 키워드 주변으로 발췌
+ * ---------------------------- */
+function extractRelevantLines(text: string, tokens: string[], mustContainAny?: string[]) {
+  const lines = (text ?? "")
+    .split("\n")
+    .map((l) => l.replace(/\r/g, "").trim())
+    .filter(Boolean);
+
+  if (!lines.length) return "";
+
+  // 표 인식(조금 넉넉하게)
+  const isMarkdownTable = lines.some((l) => l.trim().startsWith("|")) && lines.some((l) => /\|\s*---\s*\|/.test(l));
+
+  if (isMarkdownTable) {
+    const headerIdx = lines.findIndex((l) => l.trim().startsWith("|"));
+    const header = headerIdx >= 0 ? lines[headerIdx] : lines[0];
+    const divider = lines.find((l) => /\|\s*---\s*\|/.test(l)) ?? "| --- |";
+
+    // row는 '|'로 시작하는 것만
+    const rows = lines.filter((l) => l.trim().startsWith("|") && l !== header && l !== divider);
+
+    // ✅ 표는 전체 유지 (너무 길 때만 제한)
+    const keepRows = rows.length > MAX_TABLE_ROWS ? rows.slice(0, MAX_TABLE_ROWS) : rows;
+
+    let table = [header, divider, ...keepRows].join("\n");
+    if (rows.length > MAX_TABLE_ROWS) {
+      table += `\n\n(표가 길어 일부 행만 표시했습니다. 더 구체적으로 질문하면 해당 항목 위주로 안내할게요.)`;
+    }
+    return table;
+  }
+
+  const kws = uniq([...(mustContainAny ?? []), ...(tokens ?? [])]).filter((x) => (x ?? "").toString().trim().length >= 2);
+  if (!kws.length) return lines.slice(0, 12).join("\n");
+
+  // 일반 텍스트: 매칭 줄 + 앞뒤 1줄
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const ll = safeLower(lines[i]);
+    const hit = kws.some((k) => ll.includes(safeLower(k)));
+    if (!hit) continue;
+
+    if (i - 1 >= 0) out.push(lines[i - 1]);
+    out.push(lines[i]);
+    if (i + 1 < lines.length) out.push(lines[i + 1]);
+  }
+
+  const compact = uniq(out).join("\n").trim();
+  return compact || lines.slice(0, 12).join("\n");
+}
+
+/** -----------------------------
+ * Scoring
  * ---------------------------- */
 function calcScore(content: string, sim: number, tokens: string[], mustContainAny?: string[]) {
   const cl = safeLower(content);
@@ -486,7 +528,6 @@ function calcScore(content: string, sim: number, tokens: string[], mustContainAn
         : -0.5
       : 0;
 
-  // sim은 약하게, 토큰 일치 + must 키워드 보너스를 강하게
   return tokenRatio * 10 + sim * 2 + mustBonus;
 }
 
@@ -524,15 +565,13 @@ async function fetchWindowChunks(
 }
 
 /** -----------------------------
- * Section clamp (13번 휴가규정 같은 문서에서만)
- *  - "📌 연차 휴가" / "📌 경조 휴가" / "📌 기타 휴가"
+ * Section clamp
  * ---------------------------- */
 function clampToSection(text: string, header?: string | null) {
   if (!header) return text;
   const idx = text.indexOf(header);
   if (idx < 0) return text;
   const after = text.slice(idx);
-  // 다음 섹션 시작점("📌 ") 기준으로 잘라냄
   const nextIdx = after.slice(header.length).indexOf("📌 ");
   if (nextIdx < 0) return after;
   return after.slice(0, header.length + nextIdx).trim();
@@ -540,11 +579,9 @@ function clampToSection(text: string, header?: string | null) {
 
 /** -----------------------------
  * Final hit filtering
- *  - mustContainAny 있으면 해당 키워드가 있는 chunk 위주로 남김
  * ---------------------------- */
 function filterFinalHits(question: string, hits: Hit[], mustContainAny?: string[]) {
   if (!mustContainAny?.length) return hits;
-
   const filtered = hits.filter((h) => mustContainAny.some((k) => safeLower(h.content).includes(safeLower(k))));
   return filtered.length ? filtered : hits;
 }
@@ -552,18 +589,23 @@ function filterFinalHits(question: string, hits: Hit[], mustContainAny?: string[
 /** -----------------------------
  * Build answer
  * ---------------------------- */
-function buildAnswer(intent: Intent, finalHits: Hit[], sectionHeader?: string | null) {
+function buildAnswer(
+  intent: Intent,
+  finalHits: Hit[],
+  sectionHeader?: string | null,
+  tokens: string[] = [],
+  mustContainAny?: string[]
+) {
   const formatted = finalHits.map((h) => {
     const f = formatChunkContent(h.content ?? "");
-    // 휴가규정 섹션 클램프(있을 때만)
     const clamped = clampToSection(f.text, sectionHeader);
-    return { ...h, formatted: clamped, hasTable: f.hasTable };
+    const extracted = extractRelevantLines(clamped, tokens, mustContainAny);
+    return { ...h, formatted: extracted, hasTable: f.hasTable };
   });
 
-  // 본문 순서 유지
   formatted.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0));
 
-  let body = formatted.map((h) => h.formatted).join("\n\n────────────────────────\n\n");
+  let body = formatted.map((h) => h.formatted).join("\n\n");
   body = cleanText(body);
 
   const sourceLines = uniq(formatted.map((h) => `- ${h.filename} / 조각 ${h.chunk_index}`)).join("\n");
@@ -580,18 +622,14 @@ export async function POST(req: Request) {
     const question = normalize(body?.question ?? "");
     if (!question) return NextResponse.json({ error: "question missing" }, { status: 400 });
 
-    // ✅ 1) 라우팅(토픽 기반)
     const routed = routeQuestion(question);
     const { intent, filenameHints, tokens, mustContainAny, sectionHeader } = routed;
 
-    // ✅ 2) 후보 문서 ID 선정(파일명 기준)
-    let candidateDocIds = await findDocIdsByFilenameHints(supabaseAdmin, filenameHints, 5);
+    const candidateDocIds = await findDocIdsByFilenameHints(supabaseAdmin, filenameHints, 5);
 
-    // 후보가 없으면 전체 검색 fallback(기존 rpc 사용)
     let bestDocId: string | null = null;
-    let bestAnchor: { docId: string; chunk_index: number; content: string; sim: number } | null = null;
+    let bestAnchor: { docId: string; chunk_index: number; content: string; sim: number; score?: number } | null = null;
 
-    // ✅ 3) 후보 문서들 "문서 내부 검색"으로 best anchor 뽑기
     if (candidateDocIds.length) {
       for (const docId of candidateDocIds) {
         const res = await supabaseAdmin.rpc("search_chunks_in_document", {
@@ -616,21 +654,19 @@ export async function POST(req: Request) {
         const top = scored[0];
         if (!top) continue;
 
-        if (!bestAnchor || top.score > (bestAnchor as any).score) {
+        if (!bestAnchor || top.score > (bestAnchor.score ?? -999999)) {
           bestDocId = docId;
           bestAnchor = {
             docId,
             chunk_index: Number(top.chunk_index ?? 0),
             content: top.content,
             sim: Number(top.sim ?? 0),
-            // @ts-ignore
-            score: top.score,
+            score: Number(top.score ?? 0),
           };
         }
       }
     }
 
-    // ✅ 4) 후보문서 기반으로 못 잡으면: 기존 전체 검색 RPC fallback
     if (!bestDocId || !bestAnchor) {
       const first = await supabaseAdmin.rpc("search_chunks_text_v3", {
         q: question,
@@ -660,14 +696,12 @@ export async function POST(req: Request) {
         chunk_index: Number(top.chunk_index ?? 0),
         content: top.content,
         sim: Number(top.sim ?? 0),
-        // @ts-ignore
-        score: top.score,
+        score: Number((top as any).score ?? 0),
       };
     }
 
     if (!bestDocId || !bestAnchor) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
-    // ✅ 5) anchor 주변 window fetch (하지만 최종 필터로 "딸려오는 섹션" 제거)
     const meta = await fetchDocumentMeta(supabaseAdmin, bestDocId);
     const filename = meta?.filename ?? "(unknown)";
 
@@ -677,15 +711,12 @@ export async function POST(req: Request) {
     const windowChunks = await fetchWindowChunks(supabaseAdmin, bestDocId, fromIdx, toIdx, filename);
     if (!windowChunks?.length) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
-    // ✅ 6) 토픽 기반 최종 필터 (돈 질문/경조금 등은 관련 chunk만 남김)
     let finalHits = filterFinalHits(question, windowChunks, mustContainAny);
-
-    // 그래도 너무 짧아지면 anchor만이라도 포함
     if (!finalHits.length) {
       finalHits = [windowChunks.find((h) => h.chunk_index === bestAnchor!.chunk_index) ?? windowChunks[0]];
     }
 
-    const { answer, citations } = buildAnswer(intent, finalHits, sectionHeader ?? null);
+    const { answer, citations } = buildAnswer(intent, finalHits, sectionHeader ?? null, tokens, mustContainAny);
     return NextResponse.json({ intent, answer, citations });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
