@@ -30,46 +30,28 @@ export async function POST(req: NextRequest) {
   try {
     const sb = supabaseAdmin();
     const body = await req.json().catch(() => ({}));
-    const q =
-  (body?.q ??
-    body?.message ??
-    body?.question ??
-    body?.text ??
-    body?.prompt ??
-    body?.input ??
-    "") // 여기까지 모두 허용
-    .toString()
-    .trim();
 
-if (!q) {
-  return NextResponse.json(
-    { error: "q is required", received_keys: Object.keys(body ?? {}) },
-    { status: 400 }
-  );
-}
+    // 프론트는 question으로 보내고 있으니 둘 다 받기
+    const q = (body?.q ?? body?.question ?? "").toString().trim();
+    if (!q) return NextResponse.json({ error: "q is required" }, { status: 400 });
 
-    // 1) tsv 기반 FTS: document_blocks만으로 1차 hit
-    // websearch 문법을 흉내내기 위해 간단히 공백을 & 로 바꿈
-    const fts = q
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((t: string) => t.replace(/[':()&|!]/g, "")) // tsquery 깨지는 문자 최소 제거
-      .filter(Boolean)
-      .join(" & ");
+    // ✅ 한국어/띄어쓰기 안정: 부분일치
+    const like = `%${q.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
 
-    const { data: hits, error: e1 } = await sb
+    const { data: hitsRaw, error } = await sb
       .from("document_blocks")
       .select("id, document_id, block_index, kind, text, table_html")
-      .textSearch("tsv", fts, { type: "plain" })
-      .limit(14);
+      .or(`text.ilike.${like},table_html.ilike.${like}`)
+      .limit(30);
 
-    if (e1) return NextResponse.json({ error: e1.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    if (!hits || hits.length === 0) {
+    const hits = (hitsRaw ?? []) as Hit[];
+    if (!hits.length) {
       return NextResponse.json({ ok: true, blocks: [], message: FALLBACK });
     }
 
-    // 2) 문서 pick: 가장 많이 hit된 문서
+    // 1) 문서 pick: 가장 많이 hit된 문서
     const countByDoc = new Map<string, number>();
     for (const h of hits) countByDoc.set(h.document_id, (countByDoc.get(h.document_id) ?? 0) + 1);
 
@@ -82,7 +64,7 @@ if (!q) {
       }
     }
 
-    // 3) 파일명 조회
+    // 2) 파일명 조회
     const { data: doc, error: eDoc } = await sb
       .from("documents")
       .select("id, filename")
@@ -91,10 +73,10 @@ if (!q) {
 
     if (eDoc) return NextResponse.json({ error: eDoc.message }, { status: 500 });
 
-    // 4) 주변 문맥 window 확장
+    // 3) 주변 문맥 window 확장
     const topIndices = hits
       .filter((h) => h.document_id === bestDocId)
-      .slice(0, 5)
+      .slice(0, 6)
       .map((h) => h.block_index);
 
     const minI = Math.max(0, Math.min(...topIndices) - 2);
@@ -126,6 +108,7 @@ if (!q) {
       meta: {
         picked_document: { id: bestDocId, filename: doc.filename, hitCount: bestCount },
         window: { from: minI, to: maxI },
+        query: q,
       },
     });
   } catch (err: any) {
