@@ -33,7 +33,13 @@ type AnswerResponse = {
 
 function ChunkCard({ c }: { c: Chunk }) {
   const [open, setOpen] = useState(false);
-  const cleaned = (c.content ?? "").replace(/\n{3,}/g, "\n\n").trim();
+  const cleaned = (c.content ?? "")
+  .replace(/\r\n/g, "\n")                 // Windows -> Unix
+  .replace(/\r/g, "\n")                   // old Mac -> Unix
+  .replace(/\u00A0/g, " ")                // NBSP -> space
+  .replace(/[ \t]+\n/g, "\n")             // 줄끝 공백 제거
+  .replace(/\n{3,}/g, "\n\n")             // 과한 빈줄 축소
+  .trim();
 
   return (
     <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
@@ -58,9 +64,16 @@ function ChunkCard({ c }: { c: Chunk }) {
           원문은 접혀있어요. 필요할 때 “원문 보기”를 눌러 확인해 주세요.
         </div>
       ) : (
-        <pre className="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-white/85">
-          {cleaned}
-        </pre>
+        <pre
+  className="mt-3 text-xs leading-relaxed text-white/85"
+  style={{
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+    wordBreak: "break-word",
+  }}
+>
+  {cleaned}
+</pre>
       )}
     </div>
   );
