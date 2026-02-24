@@ -508,9 +508,8 @@ function formatChunkContent(content: string): { text: string; hasTable: boolean 
  * ---------------------------- */
 function extractRelevantLines(text: string, tokens: string[], mustContainAny?: string[]) {
   const lines = (text ?? "")
-    .split("\n")
-    .map((l) => l.replace(/\r/g, "").trimEnd())
-    .filter((l) => l.trim().length > 0);
+  .split("\n")
+  .map((l) => l.replace(/\r/g, ""));  // trimEnd, filter 제거
 
   if (!lines.length) return "";
 
