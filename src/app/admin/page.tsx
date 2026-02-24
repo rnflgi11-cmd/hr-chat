@@ -73,7 +73,7 @@ export default function AdminPage() {
 
     try {
       const form = new FormData();
-      files.forEach((file) => form.append("file", file));
+      files.forEach((file) => form.append("files", file));
       form.append("user", JSON.stringify(user));
 
       const res = await fetch("/api/admin/upload", {
