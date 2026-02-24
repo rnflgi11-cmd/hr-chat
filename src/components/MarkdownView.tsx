@@ -4,6 +4,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 
 const styles: Record<string, React.CSSProperties> = {
   root: {
@@ -52,7 +53,6 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "auto",
   },
 
-  // ✅ 테이블: 작은 화면에서도 절대 깨지지 않게 "가로 스크롤" + "셀 줄바꿈" 허용
   tableWrap: { overflowX: "auto", margin: "10px 0" },
   table: {
     borderCollapse: "collapse",
@@ -83,7 +83,8 @@ export default function MarkdownView({ text }: { text: string }) {
   return (
     <div style={styles.root}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        // ✅ gfm(표) + breaks(단일 개행을 <br>로)
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           p: ({ children, ...props }) => (
             <p style={styles.p} {...props}>
@@ -117,7 +118,6 @@ export default function MarkdownView({ text }: { text: string }) {
           ),
           hr: (props) => <hr style={styles.hr} {...props} />,
 
-          // react-markdown v9: inline prop 없음
           code({ children, ...props }) {
             const className = (props as any).className || "";
             const isBlock =

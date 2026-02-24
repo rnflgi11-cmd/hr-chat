@@ -509,22 +509,25 @@ function formatChunkContent(content: string): { text: string; hasTable: boolean 
 function extractRelevantLines(text: string, tokens: string[], mustContainAny?: string[]) {
   const lines = (text ?? "")
     .split("\n")
-    .map((l) => l.replace(/\r/g, "").trim())
-    .filter(Boolean);
+    .map((l) => l.replace(/\r/g, "").trimEnd())
+    .filter((l) => l.trim().length > 0);
 
   if (!lines.length) return "";
 
-  const kws = uniq([...(mustContainAny ?? []), ...(tokens ?? [])]).filter((x) => (x ?? "").toString().trim().length >= 2);
+  const kws = uniq([...(mustContainAny ?? []), ...(tokens ?? [])]).filter(
+    (x) => (x ?? "").toString().trim().length >= 2
+  );
 
-  // 표 인식(넉넉하게)
-  const isMarkdownTable = lines.some((l) => l.trim().startsWith("|")) && lines.some((l) => /\|\s*---\s*\|/.test(l));
+  // 표 인식
+  const isMarkdownTable =
+    lines.some((l) => l.trim().startsWith("|")) && lines.some((l) => /\|\s*---\s*\|/.test(l));
 
   if (isMarkdownTable) {
     const header = lines.find((l) => l.trim().startsWith("|")) ?? lines[0];
     const divider = lines.find((l) => /\|\s*---\s*\|/.test(l)) ?? "| --- |";
     const rows = lines.filter((l) => l.trim().startsWith("|") && l !== header && l !== divider);
 
-    // 1) 키워드 매칭 행만 우선 출력
+    // 1) 키워드 매칭 행만 우선
     if (kws.length) {
       const matchedRows = rows.filter((r) => {
         const rl = safeLower(r);
@@ -537,7 +540,7 @@ function extractRelevantLines(text: string, tokens: string[], mustContainAny?: s
       }
     }
 
-    // 2) 매칭이 없으면 전체 표(너무 길면 제한)
+    // 2) 매칭 없으면 전체 표(너무 길면 제한)
     const keepRows = rows.length > MAX_TABLE_ROWS ? rows.slice(0, MAX_TABLE_ROWS) : rows;
     let table = [header, divider, ...keepRows].join("\n");
     if (rows.length > MAX_TABLE_ROWS) {
@@ -546,22 +549,36 @@ function extractRelevantLines(text: string, tokens: string[], mustContainAny?: s
     return table;
   }
 
-  // 일반 텍스트 발췌
-  if (!kws.length) return lines.slice(0, 12).join("\n");
+  // ✅ 텍스트는 "키워드 주변"을 더 크게 보여주기 (절차/문장 흐름이 살도록)
+  //  - 키워드 매칭이 있으면: 첫 매칭 기준으로 앞 6줄 ~ 뒤 30줄
+  //  - 없으면: 앞에서 40줄
+  const MAX_LINES = 60;
 
-  const out: string[] = [];
+  if (!kws.length) return lines.slice(0, 40).join("\n");
+
+  let firstHit = -1;
   for (let i = 0; i < lines.length; i++) {
     const ll = safeLower(lines[i]);
-    const hit = kws.some((k) => ll.includes(safeLower(k)));
-    if (!hit) continue;
-
-    if (i - 1 >= 0) out.push(lines[i - 1]);
-    out.push(lines[i]);
-    if (i + 1 < lines.length) out.push(lines[i + 1]);
+    if (kws.some((k) => ll.includes(safeLower(k)))) {
+      firstHit = i;
+      break;
+    }
   }
 
-  const compact = uniq(out).join("\n").trim();
-  return compact || lines.slice(0, 12).join("\n");
+  if (firstHit >= 0) {
+    const start = Math.max(0, firstHit - 6);
+    const end = Math.min(lines.length, firstHit + 31); // 뒤로 넉넉히
+    const picked = lines.slice(start, end);
+
+    // 너무 짧으면 앞에서 더 채움
+    if (picked.length < 35) {
+      const extraEnd = Math.min(lines.length, start + MAX_LINES);
+      return lines.slice(start, extraEnd).join("\n");
+    }
+    return picked.join("\n");
+  }
+
+  return lines.slice(0, MAX_LINES).join("\n");
 }
 
 /** -----------------------------
@@ -641,6 +658,21 @@ function filterFinalHits(hits: Hit[], mustContainAny?: string[]) {
 /** -----------------------------
  * Build answer
  * ---------------------------- */
+function applyMarkdownHardBreaks(body: string) {
+  // 표 라인은 건드리면 망가질 수 있으니 제외하고,
+  // 일반 텍스트 라인만 "  \n"로 줄바꿈 강제
+  const lines = (body ?? "").split("\n");
+  const out = lines.map((l) => {
+    const t = l.trimEnd();
+    if (!t) return "";
+    if (t.startsWith("|")) return t; // table
+    if (/^\[출처\]/.test(t)) return t;
+    if (t.startsWith("- ")) return t; // 목록은 그대로
+    return t + "  "; // markdown hard break
+  });
+  return out.join("\n");
+}
+
 function buildAnswer(
   intent: Intent,
   finalHits: Hit[],
@@ -659,6 +691,7 @@ function buildAnswer(
 
   let body = formatted.map((h) => h.formatted).join("\n\n");
   body = cleanText(body);
+  body = applyMarkdownHardBreaks(body);
 
   const sourceLines = uniq(formatted.map((h) => `- ${h.filename} / 조각 ${h.chunk_index}`)).join("\n");
   return { answer: body + `\n\n[출처]\n${sourceLines}`, citations: formatted };
@@ -770,8 +803,23 @@ export async function POST(req: Request) {
       finalHits = [windowChunks.find((h) => h.chunk_index === bestAnchor!.chunk_index) ?? windowChunks[0]];
     }
 
-    const { answer, citations } = buildAnswer(intent, finalHits, sectionHeader ?? null, tokens, mustContainAny);
-    return NextResponse.json({ intent, answer, citations });
+    const { answer, citations } = buildAnswer(
+  intent,
+  finalHits,
+  sectionHeader ?? null,
+  tokens,
+  mustContainAny
+);
+
+// ✅ chat/page는 json.chunks를 기대하므로 citations -> chunks로 변환해서 내려줌
+const chunks = (citations ?? []).map((c: any) => ({
+  filename: c.filename,
+  chunk_index: c.chunk_index,
+  content: c.content, // 원문 원본(카드에서 펼쳐볼 때 쓰임)
+  sim: c.sim,
+}));
+
+return NextResponse.json({ intent, answer, chunks });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }

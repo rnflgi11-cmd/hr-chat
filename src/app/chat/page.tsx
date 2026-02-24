@@ -149,7 +149,7 @@ export default function ChatPage() {
           ts: Date.now(),
           intent: json.intent ?? "C",
           chunks: chunks.length ? chunks : undefined,
-          content: chunks.length ? undefined : `${fallbackText}`,
+          content: `${fallbackText}`.trim() || undefined,
         },
       ]);
     } catch {
