@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_FILES_PER_REQUEST = 30; // 한 번에 너무 많이 업로드 방지(필요하면 늘려도 됨)
+const MAX_FILES_PER_REQUEST = 30;
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -23,19 +23,26 @@ function sanitizeTableHtml(html: string) {
   return html;
 }
 
-/** HTML을 문단/표 블록으로 분해 (초보/안전 버전: 타입 꼬임 방지) */
+function normalizeText(s: string) {
+  return (s ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** HTML을 문단/표 블록으로 분해 (초보/안전 버전) */
 function htmlToBlocks(html: string) {
-  const $ = cheerio.load(html);
+  const $ = cheerio.load(html); // 옵션 제거
   const blocks: Array<{
-    type: "p" | "table_html";
+    kind: "paragraph" | "table";
     text: string;
-    html?: string;
+    table_html?: string;
   }> = [];
 
   const body = $("body");
 
-  // ✅ 가장 단순/안전: body 아래의 table, p만 순서대로 수집
-  // (mammoth가 div로 감싸도 body.find가 다 잡아줌)
+  // body 아래의 table, p만 순서대로 수집
   const elements = body.find("table, p").toArray();
 
   for (const el of elements as any[]) {
@@ -43,27 +50,25 @@ function htmlToBlocks(html: string) {
 
     if (tag === "table") {
       const tableHtml = $.html(el);
-      const tableText = $(el).text().replace(/\r/g, "").trim();
+      const tableText = normalizeText($(el).text());
 
-      // table이 완전 비어있진 않게
       if ((tableText && tableText.length > 0) || (tableHtml && tableHtml.length > 0)) {
         blocks.push({
-          type: "table_html",
+          kind: "table",
           text: tableText,
-          html: sanitizeTableHtml(tableHtml),
+          table_html: sanitizeTableHtml(tableHtml),
         });
       }
     } else {
-      // p 문단
-      const text = $(el).text().replace(/\r/g, "").trim();
-      if (text) blocks.push({ type: "p", text });
+      const text = normalizeText($(el).text());
+      if (text) blocks.push({ kind: "paragraph", text });
     }
   }
 
-  // ✅ 정말 특이 케이스: table/p가 하나도 안 잡히면 body 전체 텍스트를 1개 문단으로
+  // table/p가 하나도 안 잡히면 body 전체 텍스트를 1개 문단으로
   if (!blocks.length) {
-    const text = body.text().replace(/\r/g, "").trim();
-    if (text) blocks.push({ type: "p", text });
+    const text = normalizeText(body.text());
+    if (text) blocks.push({ kind: "paragraph", text });
   }
 
   return blocks;
@@ -73,21 +78,12 @@ function htmlToBlocks(html: string) {
 function getFilesFromForm(form: FormData): File[] {
   const files: File[] = [];
 
-  // 1) files (복수)
-  for (const f of form.getAll("files")) {
-    if (f instanceof File) files.push(f);
-  }
-
-  // 2) file (단수)
+  for (const f of form.getAll("files")) if (f instanceof File) files.push(f);
   const f1 = form.get("file");
   if (f1 instanceof File) files.push(f1);
+  for (const f of form.getAll("file[]")) if (f instanceof File) files.push(f);
 
-  // 3) file[] 형태
-  for (const f of form.getAll("file[]")) {
-    if (f instanceof File) files.push(f);
-  }
-
-  // 중복 제거(같은 파일 객체가 여러 키에 들어온 경우)
+  // 중복 제거
   const seen = new Set<string>();
   const uniq: File[] = [];
   for (const f of files) {
@@ -131,13 +127,8 @@ export async function POST(req: NextRequest) {
     for (const file of files) {
       const lower = (file.name ?? "").toLowerCase();
 
-      // DOCX만 지원 (표 보존)
       if (!lower.endsWith(".docx")) {
-        results.push({
-          filename: file.name,
-          ok: false,
-          error: "only .docx supported",
-        });
+        results.push({ filename: file.name, ok: false, error: "only .docx supported" });
         continue;
       }
 
@@ -158,19 +149,22 @@ export async function POST(req: NextRequest) {
         // HTML -> blocks
         const blocks = htmlToBlocks(`<body>${html}</body>`);
         if (!blocks.length) {
-          results.push({
-            filename: file.name,
-            ok: false,
-            error: "no text/table blocks detected",
-          });
+          results.push({ filename: file.name, ok: false, error: "no text/table blocks detected" });
           continue;
         }
 
-        // documents insert
+        // documents insert (스키마에 맞게 컬럼명 정리)
+        // documents: filename, mime_type(있으면), size_bytes(있으면) 정도
         const { data: doc, error: e1 } = await sb
           .from("documents")
-          .insert({ filename: file.name, mime: file.type })
-          .select("*")
+          .insert({
+            filename: file.name,
+            mime_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            size_bytes: buf.length,
+            // storage_path를 쓰는 구조면 여기에 storage upload 로직을 붙여야 함 (지금은 DB-only)
+            storage_path: `db-only/${Date.now()}_${file.name}`,
+          })
+          .select("id")
           .single();
 
         if (e1) {
@@ -178,18 +172,17 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // blocks insert
+        // blocks insert (✅ 핵심: kind/text/table_html 로 저장)
         const rows = blocks.map((b, i) => ({
           document_id: doc.id,
           block_index: i,
-          block_type: b.type,
-          content_text: b.text,
-          content_html: b.type === "table_html" ? b.html : null,
+          kind: b.kind,                 // ✅ block_type 아님
+          text: b.text ?? null,         // ✅ content_text 아님
+          table_html: b.kind === "table" ? (b.table_html ?? null) : null, // ✅ content_html 아님
         }));
 
         const { error: e2 } = await sb.from("document_blocks").insert(rows);
         if (e2) {
-          // 문서만 들어가고 블록이 실패하면 문서도 정리
           await sb.from("documents").delete().eq("id", doc.id);
           results.push({ filename: file.name, ok: false, error: e2.message });
           continue;
@@ -202,11 +195,7 @@ export async function POST(req: NextRequest) {
           blocks: rows.length,
         });
       } catch (err: any) {
-        results.push({
-          filename: file.name,
-          ok: false,
-          error: err?.message ?? "unknown error",
-        });
+        results.push({ filename: file.name, ok: false, error: err?.message ?? "unknown error" });
       }
     }
 
@@ -218,9 +207,6 @@ export async function POST(req: NextRequest) {
       results,
     });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message ?? "upload error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message ?? "upload error" }, { status: 500 });
   }
 }
