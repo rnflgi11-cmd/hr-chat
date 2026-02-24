@@ -4,82 +4,37 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { clearSessionUser, loadSessionUser } from "@/lib/auth";
 import MarkdownView from "@/components/MarkdownView";
+import AnswerRenderer from "@/components/AnswerRenderer";
 
 type UserMsg = { role: "user"; content: string; ts: number };
 
-type Chunk = {
+type Evidence = {
   filename: string;
-  chunk_index: number;
-  content: string;
-  sim?: number;
+  block_type: "p" | "table_html";
+  content_text?: string | null;
+  content_html?: string | null;
+};
+
+type AnswerPayload = {
+  intent: string;
+  summary: string;
+  evidence: Evidence[];
+  related_questions: string[];
 };
 
 type AssistantMsg = {
   role: "assistant";
   ts: number;
-  intent?: "A" | "B" | "C";
-  chunks?: Chunk[];
-  content?: string;
+  content: string | AnswerPayload; // 문자열(에러/폴백) 또는 구조화된 답변
 };
 
 type Msg = UserMsg | AssistantMsg;
 
 type AnswerResponse = {
-  intent?: "A" | "B" | "C";
-  chunks?: Chunk[];
-  answer?: string | null;
-  diag?: string;
+  ok?: boolean;
+  answer?: AnswerPayload;
   error?: string;
 };
-
-function ChunkCard({ c }: { c: Chunk }) {
-  const [open, setOpen] = useState(false);
-
-  // 원문 정리: 줄바꿈 통일 + NBSP 제거 + 과한 공백/빈줄 정리
-  const cleaned = (c.content ?? "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/\u00A0/g, " ")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return (
-    <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-xs font-semibold text-white/85">
-            {c.filename}
-          </div>
-          <div className="mt-0.5 text-[11px] text-white/45">
-            조각 #{c.chunk_index}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="shrink-0 rounded-full bg-white/6 px-3 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/10"
-        >
-          {open ? "접기" : "원문 보기"}
-        </button>
-      </div>
-
-      {!open ? (
-        <div className="mt-3 text-xs text-white/55">
-          원문은 접혀있어요. 필요할 때 “원문 보기”를 눌러 확인해 주세요.
-        </div>
-      ) : (
-        // ✅ 표/리스트/링크 등 Markdown을 실제 렌더링 (pre로 찍지 않기)
-        <div className="mt-3">
-          <div className="prose prose-invert max-w-none">
-            <MarkdownView text={cleaned} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function ChatPage() {
   const user = useMemo(
@@ -97,13 +52,12 @@ export default function ChatPage() {
     if (!user) window.location.href = "/";
   }, [user]);
 
-  // 새 메시지 추가되면 아래로 스크롤
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, sending]);
 
-  async function send() {
-    const text = q.trim();
+  async function send(textOverride?: string) {
+    const text = (textOverride ?? q).trim();
     if (!text || sending || !user) return;
 
     const next: Msg[] = [
@@ -128,34 +82,33 @@ export default function ChatPage() {
           ...next,
           {
             role: "assistant",
-            content: json.error ?? "오류가 발생했어요.",
             ts: Date.now(),
+            content: json.error ?? "오류가 발생했어요.",
           },
         ]);
         return;
       }
 
-      const chunks = json.chunks ?? [];
-      const fallbackText =
+      const payload =
         json.answer ??
-        (chunks.length === 0
-          ? "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다."
-          : "");
+        "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
       setMessages([
         ...next,
         {
           role: "assistant",
           ts: Date.now(),
-          intent: json.intent ?? "C",
-          chunks: chunks.length ? chunks : undefined,
-          content: `${fallbackText}`.trim() || undefined,
+          content: payload,
         },
       ]);
     } catch {
       setMessages([
         ...next,
-        { role: "assistant", content: "네트워크 오류가 발생했어요.", ts: Date.now() },
+        {
+          role: "assistant",
+          ts: Date.now(),
+          content: "네트워크 오류가 발생했어요.",
+        },
       ]);
     } finally {
       setSending(false);
@@ -166,6 +119,17 @@ export default function ChatPage() {
     clearSessionUser();
     window.location.href = "/";
   }
+
+  // 관련 질문 버튼 클릭(AnswerRenderer에서 발생시키는 suggest 이벤트 처리)
+  useEffect(() => {
+    function onSuggest(ev: Event) {
+      const q = (ev as CustomEvent).detail as string;
+      if (typeof q === "string" && q.trim()) send(q);
+    }
+    window.addEventListener("suggest", onSuggest as any);
+    return () => window.removeEventListener("suggest", onSuggest as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, sending, user]);
 
   if (!user) return null;
 
@@ -246,9 +210,7 @@ export default function ChatPage() {
         <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div className="text-sm font-semibold">대화</div>
-            <div className="text-xs text-white/55">
-              질문을 입력하면 규정 원문을 함께 보여줘요
-            </div>
+            <div className="text-xs text-white/55">질문을 입력하면 근거 원문을 함께 보여줘요</div>
           </div>
 
           {/* Messages */}
@@ -277,30 +239,13 @@ export default function ChatPage() {
                           ].join(" ")}
                         >
                           {m.role === "assistant" ? (
-                            <div className="grid gap-3">
-                              {/* intent 출력 숨김 유지 */}
-                              {m.content && (
-                                <div className="prose prose-invert max-w-none">
-                                  <MarkdownView text={m.content} />
-                                </div>
-                              )}
-
-                              {m.chunks && m.chunks.length > 0 && (
-                                <>
-                                  <div className="text-sm font-semibold text-white/85">
-                                    관련 규정 원문
-                                  </div>
-                                  <div className="grid gap-3">
-                                    {m.chunks.map((c, i) => (
-                                      <ChunkCard
-                                        key={`${c.filename}-${c.chunk_index}-${i}`}
-                                        c={c}
-                                      />
-                                    ))}
-                                  </div>
-                                </>
-                              )}
-                            </div>
+                            typeof m.content === "string" ? (
+                              <div className="prose prose-invert max-w-none">
+                                <MarkdownView text={m.content} />
+                              </div>
+                            ) : (
+                              <AnswerRenderer data={m.content} />
+                            )
                           ) : (
                             <div className="prose prose-invert max-w-none">
                               <MarkdownView text={m.content} />
@@ -349,11 +294,12 @@ export default function ChatPage() {
                     "경조휴가 며칠이야?",
                     "기타휴가 종류 알려줘",
                     "프로젝트 수당 기준 알려줘",
+                    "안식년 기준은?",
                   ].map((t) => (
                     <button
                       key={t}
                       type="button"
-                      onClick={() => setQ(t)}
+                      onClick={() => send(t)}
                       className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
                     >
                       {t}
@@ -364,7 +310,7 @@ export default function ChatPage() {
 
               <button
                 type="button"
-                onClick={send}
+                onClick={() => send()}
                 disabled={sending}
                 className="h-[52px] rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100"
               >

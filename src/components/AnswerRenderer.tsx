@@ -8,31 +8,56 @@ type Evidence = {
 };
 
 export default function AnswerRenderer({ data }: { data: any }) {
+  const evidence: Evidence[] = data?.evidence ?? [];
+
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div style={{ padding: 12, border: "1px solid #e5e7eb", borderRadius: 12 }}>
-        <div style={{ fontWeight: 900, marginBottom: 6 }}>안내</div>
-        <div>{data?.summary}</div>
+    <div className="grid gap-3">
+      {/* 요약 */}
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+        <div className="text-sm font-semibold text-white/85">안내</div>
+        <div className="mt-2 text-sm leading-6 text-white/90">{data?.summary}</div>
       </div>
 
-      <div style={{ padding: 12, border: "1px solid #e5e7eb", borderRadius: 12 }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>근거(규정)</div>
+      {/* 근거 */}
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+        <div className="text-sm font-semibold text-white/85">근거(규정 원문)</div>
 
-        <div style={{ display: "grid", gap: 10 }}>
-          {(data?.evidence ?? []).map((e: Evidence, i: number) => (
-            <div key={i} style={{ border: "1px solid #f3f4f6", borderRadius: 12, padding: 10 }}>
-              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>{e.filename}</div>
+        <div className="mt-3 grid gap-3">
+          {evidence.map((e, i) => (
+            <div key={i} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="mb-2 text-xs font-bold text-white/80">{e.filename}</div>
 
               {e.block_type === "table_html" && e.content_html ? (
-                <div style={{ overflowX: "auto" }} dangerouslySetInnerHTML={{ __html: e.content_html }} />
+                <div className="overflow-x-auto">
+                  <div
+                    className="prose prose-invert max-w-none"
+                    dangerouslySetInnerHTML={{ __html: e.content_html }}
+                  />
+                </div>
               ) : (
-                <pre style={{ margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                <pre className="m-0 whitespace-pre-wrap text-sm leading-6 text-white/90">
                   {e.content_text ?? ""}
                 </pre>
               )}
             </div>
           ))}
         </div>
+      </div>
+
+      {/* 관련 질문 */}
+      <div className="flex flex-wrap gap-2">
+        {(data?.related_questions ?? []).map((q: string, i: number) => (
+          <button
+            key={i}
+            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/85 hover:bg-white/10"
+            onClick={() => {
+              const ev = new CustomEvent("suggest", { detail: q });
+              window.dispatchEvent(ev);
+            }}
+          >
+            {q}
+          </button>
+        ))}
       </div>
     </div>
   );
