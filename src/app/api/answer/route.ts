@@ -219,15 +219,68 @@ export async function POST(req: NextRequest) {
     if (eDoc) return NextResponse.json({ error: eDoc.message }, { status: 500 });
 
     // best 문서에서 “가장 점수 높은 블록” 중심으로 window 확장
-    const bestInDoc = hits
-      .filter((r) => r.document_id === bestDocId)
-      .map((r) => ({ r, s: scoreRow(r) }))
-      .sort((a, b) => b.s - a.s)
-      .slice(0, 5);
+    // best 문서에서 window 확장 (기본: 상위 hit 주변)
+// ✅ 며칠/일수 질문이면: 문서 내에서 "\d+일" 블록을 다시 찾아 그 주변을 보여준다.
+const isDayQuestion = /며칠|일수|몇일/.test(q);
 
-    const indices = bestInDoc.map((x) => x.r.block_index);
-    const minI = Math.max(0, Math.min(...indices) - 2);
-    const maxI = Math.max(...indices) + 3;
+let minI = 0;
+let maxI = 0;
+
+// 1) 기본 window 후보 (상위 hit 기반)
+const bestInDoc = hits
+  .filter((r) => r.document_id === bestDocId)
+  .map((r) => ({ r, s: scoreRow(r) }))
+  .sort((a, b) => b.s - a.s)
+  .slice(0, 6);
+
+const baseIndices = bestInDoc.map((x) => x.r.block_index);
+const baseMin = Math.max(0, Math.min(...baseIndices) - 2);
+const baseMax = Math.max(...baseIndices) + 3;
+
+// 2) "며칠/일수"면 숫자+일 블록을 문서에서 추가 탐색
+if (isDayQuestion) {
+  // 문서 내에서 '일'이 들어간 블록을 넓게 가져온 뒤 서버에서 정규식으로 걸러냄
+  const { data: dayCand, error: dayErr } = await sb
+    .from("document_blocks")
+    .select("id, document_id, block_index, kind, text, table_html")
+    .eq("document_id", bestDocId)
+    .or("text.ilike.%일%,table_html.ilike.%일%")
+    .order("block_index", { ascending: true })
+    .limit(300);
+
+  if (dayErr) return NextResponse.json({ error: dayErr.message }, { status: 500 });
+
+  const regex = /\d+\s*일/;
+
+  const matched = (dayCand ?? []).filter((r: any) => {
+    const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
+    return regex.test(hay);
+  });
+
+  // 숫자+일 블록이 있으면 그 주변을 우선
+  if (matched.length > 0) {
+    // "경조" 관련 단어가 같이 있으면 더 우선
+    const weighted = matched
+      .map((r: any) => {
+        const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
+        const bonus = /경조|조위|결혼|사망|부고|배우자|부모|자녀/.test(hay) ? 50 : 0;
+        return { r, score: bonus + (r.kind === "table" ? 10 : 0) };
+      })
+      .sort((a: any, b: any) => b.score - a.score);
+
+    const pivot = weighted[0].r.block_index;
+    minI = Math.max(0, pivot - 3);
+    maxI = pivot + 6; // 표는 아래로 조금 더
+  } else {
+    // 숫자+일 못 찾으면 기본 window
+    minI = baseMin;
+    maxI = baseMax;
+  }
+} else {
+  // 기본 질문은 기존 window
+  minI = baseMin;
+  maxI = baseMax;
+}
 
     const { data: ctx, error: e2 } = await sb
       .from("document_blocks")
