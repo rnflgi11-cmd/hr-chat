@@ -2,220 +2,244 @@
 
 import React, { useMemo, useState } from "react";
 
-type Evidence = {
-  filename: string;
-  block_type: "p" | "table_html";
-  content_text?: string | null;
-  content_html?: string | null;
+type Block = {
+  id?: string;
+  document_id?: string;
+  block_index?: number;
+  kind?: "paragraph" | "table";
+  text?: string | null;
+  table_html?: string | null;
+  tsv?: string | null;
+  filename?: string | null;
 };
 
-type AnswerPayload = {
-  intent: string;
-  summary: string;
-  evidence: Evidence[];
-  related_questions: string[];
+type NormalizedPayload = {
+  answer: string;
+  hits: Block[];
 };
 
-function clean(s: string) {
-  return (s ?? "").replace(/\s+/g, " ").trim();
+// ✅ 어떤 형태가 와도 안전하게 {answer, hits}로 정규화
+function normalizeData(data: unknown): NormalizedPayload {
+  // string이면 답변만
+  if (typeof data === "string") return { answer: data, hits: [] };
+
+  // null/undefined면 빈값
+  if (!data) return { answer: "", hits: [] };
+
+  // object면 answer/hits 뽑기
+  if (typeof data === "object") {
+    const obj = data as any;
+    const answer =
+      typeof obj.answer === "string"
+        ? obj.answer
+        : typeof obj.content === "string"
+          ? obj.content
+          : "";
+
+    const hits = Array.isArray(obj.hits) ? (obj.hits as Block[]) : [];
+
+    return { answer, hits };
+  }
+
+  // 그 외(숫자/불리언 등)
+  return { answer: String(data), hits: [] };
 }
 
-function isHeadingLine(s: string) {
-  // “1. …”, “2. …”, “[...]” 같은 제목/섹션 라인
+function clampText(s: string, max = 520) {
+  const t = (s ?? "").trim();
+  if (t.length <= max) return { text: t, clamped: false };
+  return { text: t.slice(0, max).trimEnd() + "…", clamped: true };
+}
+
+function SafeHTML({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+export default function AnswerRenderer({ data }: { data: unknown }) {
+  const payload = useMemo(() => normalizeData(data), [data]);
+
+  const [showSources, setShowSources] = useState(false);
+  const answer = (payload.answer ?? "").trim();
+  const hits = payload.hits ?? [];
+
   return (
-    /^\[\s*.+\s*\]$/.test(s) ||
-    /^\d+\.\s+/.test(s) ||
-    /^[가-힣A-Za-z0-9]+\s*[:：]/.test(s)
+    <div style={{ display: "grid", gap: 12 }}>
+      {/* 답변 */}
+      <div
+        style={{
+          padding: 14,
+          borderRadius: 14,
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          color: "#e5e7eb",
+          lineHeight: 1.55,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          overflow: "visible",
+        }}
+      >
+        {answer || "답변을 생성하지 못했습니다."}
+      </div>
+
+      {/* 근거 토글 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          onClick={() => setShowSources((v) => !v)}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 12,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(255,255,255,0.06)",
+            color: "#e5e7eb",
+            cursor: "pointer",
+            fontWeight: 800,
+            fontSize: 13,
+          }}
+        >
+          근거 원문 {showSources ? "접기" : "보기"}
+        </button>
+
+        <div style={{ color: "rgba(229,231,235,0.7)", fontSize: 12 }}>
+          {hits.length ? `근거 ${hits.length}개` : "근거 없음"}
+        </div>
+      </div>
+
+      {/* 근거 리스트 */}
+      {showSources && (
+        <div style={{ display: "grid", gap: 10 }}>
+          {hits.map((b, idx) => (
+            <SourceBlock key={(b.id as string) ?? `${idx}`} b={b} idx={idx} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-function makeSummary(evidence: Evidence[]) {
-  // ✅ 표가 있으면 표를 우선 요약(며칠/일수 질문에 제일 정확)
-  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
-  if (table) {
-    // 표가 있으면 요약은 “표가 근거” 한 줄만 만들고, 실제 내용은 표가 보여주니까 OK
-    return ["아래 표에서 경조유형/대상별 휴가일수를 확인할 수 있습니다."];
-  }
-
-  // 표가 없으면 문단 중 “의미있는 줄” 3~6줄로 구성
-  const lines: string[] = [];
-
-  for (const ev of evidence) {
-    if (ev.block_type !== "p") continue;
-    const t = clean(ev.content_text ?? "");
-    if (!t) continue;
-
-    // 너무 짧은 조각 제거
-    if (t.length < 10) continue;
-
-    // '문의:' 같은 안내는 요약에서 제외
-    if (/^문의[:：]/.test(t)) continue;
-
-    // 중복 제거
-    if (lines.includes(t)) continue;
-
-    // 제목/섹션 라인 우선
-    if (isHeadingLine(t)) lines.push(t);
-    else if (lines.length < 6) lines.push(t);
-
-    if (lines.length >= 6) break;
-  }
-
-  return lines.length ? lines : ["관련 내용을 찾았지만 요약할 문장을 구성하지 못했습니다. 아래 근거 원문을 확인해 주세요."];
-}
-
-export default function AnswerRenderer({ data }: { data: AnswerPayload }) {
-  const evidence = Array.isArray(data?.evidence) ? data.evidence : [];
-
-  // ✅ 표 다음에 표 내용이 paragraph로 반복되는 중복 제거
-  const filtered = useMemo(() => {
-    const out: Evidence[] = [];
-    let lastTableText = "";
-
-    for (const ev of evidence) {
-      if (ev.block_type === "table_html") {
-        lastTableText = (ev.content_text ?? "").replace(/\s+/g, "");
-        out.push(ev);
-        continue;
-      }
-
-      if (ev.block_type === "p" && lastTableText) {
-        const t = (ev.content_text ?? "").replace(/\s+/g, "");
-        if (t.length >= 3 && lastTableText.includes(t)) continue;
-        // ✅ 표 열 헤더 같은 단어는 그냥 제거(구분/대상/비고/휴가일수/첨부서류 등)
-const headerWords = new Set(["구분", "대상", "비고", "내용", "휴가일수", "첨부서류", "경조유형"]);
-if (headerWords.has((ev.content_text ?? "").trim())) continue;
-      }
-
-      out.push(ev);
-    }
-
-    return out;
-  }, [evidence]);
-
-  const summaryLines = useMemo(() => makeSummary(filtered), [filtered]);
-
-  const fallback =
-    data?.summary?.trim() ||
-    "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
-
-  const hasEvidence = filtered.length > 0;
+function SourceBlock({ b, idx }: { b: Block; idx: number }) {
   const [open, setOpen] = useState(false);
 
-  if (!hasEvidence) {
-    return <div className="text-sm leading-relaxed text-white/90">{fallback}</div>;
-  }
-
-  // 근거 파일명 하나만 대표로
-  const 대표파일 = filtered[0]?.filename ?? "";
+  const kind = b.kind ?? (b.table_html ? "table" : "paragraph");
+  const title = kind === "table" ? "표" : "원문";
 
   return (
-    <div className="space-y-4">
-      {/* 상단: 요약 답변 영역 */}
-      <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
-        <div className="text-xs text-white/55">
-          <span className="font-semibold text-white/70">근거 문서</span>{" "}
-          <span className="text-white/70">{대표파일}</span>
+    <div
+      style={{
+        borderRadius: 16,
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        padding: 12,
+        overflow: "visible", // ✅ 짤림 방지
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 11, color: "rgba(229,231,235,0.55)" }}>
+            {(b.filename ?? "문서") +
+              (typeof b.block_index === "number"
+                ? ` · #${b.block_index}`
+                : ` · #${idx}`)}
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#e5e7eb" }}>
+            {title}
+          </div>
         </div>
 
-        <div className="mt-2 space-y-2 text-sm leading-relaxed text-white/90">
-          {summaryLines.length ? (
-            summaryLines.map((t, i) => (
-              <div key={i} className="whitespace-pre-wrap">
-                {t}
-              </div>
-            ))
-          ) : (
-            <div>{fallback}</div>
-          )}
-        </div>
-      </div>
-
-      {/* 하단: 근거 원문은 “접기/펼치기” */}
-      <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
         <button
-          type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex w-full items-center justify-between px-4 py-3 text-left"
+          style={{
+            flex: "0 0 auto",
+            padding: "8px 10px",
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(255,255,255,0.06)",
+            color: "#e5e7eb",
+            cursor: "pointer",
+            fontWeight: 800,
+            fontSize: 12,
+            height: 34,
+          }}
         >
-          <div className="text-sm font-semibold text-white/80">근거 원문 보기</div>
-          <div className="text-xs text-white/60">{open ? "접기" : "펼치기"}</div>
+          {open ? "닫기" : "열기"}
         </button>
-
-        {open && (
-          <div className="border-t border-white/10 px-4 py-4 space-y-3">
-            {filtered.map((ev, idx) => {
-              const key = `${ev.filename}_${idx}`;
-
-              if (ev.block_type === "p") {
-                const text = (ev.content_text ?? "").trim();
-                if (!text) return null;
-
-                return (
-                  <div key={key} className="rounded-xl bg-white/5 p-3">
-                    <div className="mb-1 text-[11px] text-white/45">{ev.filename}</div>
-                    <div className="text-sm leading-relaxed text-white/90 whitespace-pre-wrap">
-                      {text}
-                    </div>
-                  </div>
-                );
-              }
-
-              if (ev.block_type === "table_html") {
-                const html = (ev.content_html ?? "").trim();
-                if (!html) return null;
-
-                return (
-                  <div key={key} className="rounded-xl bg-white/5 p-3">
-                    <div className="mb-2 text-[11px] text-white/45">{ev.filename} (표)</div>
-                    <div
-                      className="overflow-auto rounded-xl bg-white/95 p-2 text-black"
-                      dangerouslySetInnerHTML={{ __html: html }}
-                    />
-                    <style jsx>{`
-                      :global(table) {
-                        border-collapse: collapse;
-                        width: 100%;
-                        font-size: 13px;
-                      }
-                      :global(td),
-                      :global(th) {
-                        border: 1px solid rgba(0, 0, 0, 0.15);
-                        padding: 6px 8px;
-                        vertical-align: top;
-                      }
-                      :global(p) {
-                        margin: 0;
-                      }
-                    `}</style>
-                  </div>
-                );
-              }
-
-              return null;
-            })}
-          </div>
-        )}
       </div>
 
-      {/* 관련 질문 버튼 */}
-      {Array.isArray(data.related_questions) && data.related_questions.length > 0 ? (
-        <div>
-          <div className="mb-2 text-xs font-semibold text-white/70">관련 질문</div>
-          <div className="flex flex-wrap gap-2">
-            {data.related_questions.map((q) => (
-              <button
-                key={q}
-                type="button"
-                onClick={() => window.dispatchEvent(new CustomEvent("suggest", { detail: q }))}
-                className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
-              >
-                {q}
-              </button>
-            ))}
-          </div>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {kind === "table" ? <TableBlock b={b} /> : <ParagraphBlock b={b} />}
         </div>
-      ) : null}
+      )}
+    </div>
+  );
+}
+
+function ParagraphBlock({ b }: { b: Block }) {
+  const raw = (b.text ?? "").trim();
+  const [more, setMore] = useState(false);
+  const { text, clamped } = useMemo(() => clampText(raw, 520), [raw]);
+
+  return (
+    <div>
+      <div
+        style={{
+          color: "#e5e7eb",
+          lineHeight: 1.6,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          overflow: "visible",
+          fontSize: 13,
+        }}
+      >
+        {more ? raw : text}
+      </div>
+
+      {clamped && (
+        <button
+          onClick={() => setMore((v) => !v)}
+          style={{
+            marginTop: 8,
+            padding: "8px 10px",
+            borderRadius: 10,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(255,255,255,0.06)",
+            color: "#e5e7eb",
+            cursor: "pointer",
+            fontWeight: 800,
+            fontSize: 12,
+          }}
+        >
+          {more ? "접기" : "더보기"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TableBlock({ b }: { b: Block }) {
+  const html = (b.table_html ?? "").trim();
+
+  return (
+    <div
+      style={{
+        borderRadius: 12,
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.10)",
+        padding: 10,
+        overflowX: "auto", // ✅ 가로 스크롤로 짤림 해결
+        overflowY: "auto",
+        maxHeight: 520,
+        WebkitOverflowScrolling: "touch",
+      }}
+    >
+      {html ? (
+        <div style={{ minWidth: 680 }}>
+          <SafeHTML html={html} />
+        </div>
+      ) : (
+        <div style={{ color: "rgba(229,231,235,0.7)", fontSize: 12 }}>
+          table_html 없음
+        </div>
+      )}
     </div>
   );
 }

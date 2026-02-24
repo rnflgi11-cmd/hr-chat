@@ -20,6 +20,8 @@ type AnswerPayload = {
   summary: string;
   evidence: Evidence[];
   related_questions: string[];
+  answer?: string;
+  hits?: number;
 };
 
 type AssistantMsg = {
