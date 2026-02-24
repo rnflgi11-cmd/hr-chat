@@ -127,15 +127,18 @@ function chunkTextSmart(text: string, size = CHUNK_SIZE) {
   return out;
 }
 
-async function fileToText(file: File, ab: ArrayBuffer) {
-  const name = file.name.toLowerCase();
+async function fileToText(file: File, fileBuf: Buffer) {
+  const name = (file.name || "").toLowerCase();
 
+  // ✅ DOCX (Node.js mammoth는 buffer 사용)
   if (name.endsWith(".docx")) {
-    const { value: html } = await mammoth.convertToHtml({ arrayBuffer: ab });
+    const { value: html } = await mammoth.convertToHtml({ buffer: fileBuf });
     return htmlToTextPreserve(html);
   }
 
-  const text = new TextDecoder("utf-8").decode(new Uint8Array(ab));
+  // 나머지: Buffer -> 텍스트
+  const text = fileBuf.toString("utf-8");
+  if (name.endsWith(".html") || name.endsWith(".htm")) return htmlToTextPreserve(text);
   return normalizeNewlines(text);
 }
 
@@ -207,7 +210,7 @@ export async function POST(req: NextRequest) {
         const docId = ins.data.id;
 
         // ✅ 같은 arrayBuffer 재사용
-        const extracted = await fileToText(file, ab);
+        const extracted = await fileToText(file, fileBuf);
         const chunks = chunkTextSmart(extracted);
 
         if (!chunks.length) {
