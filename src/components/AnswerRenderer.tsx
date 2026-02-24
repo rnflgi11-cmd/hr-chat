@@ -1,106 +1,146 @@
 "use client";
 
-import React from "react";
-import MarkdownView from "@/components/MarkdownView";
+import React, { useMemo } from "react";
 
-type Block = {
-  filename?: string;
-  kind: "heading" | "paragraph" | "table" | string;
-  text?: string | null;
-  table_html?: string | null;
-  block_index?: number;
+type Evidence = {
+  filename: string;
+  block_type: "p" | "table_html";
+  content_text?: string | null;
+  content_html?: string | null;
 };
 
-type AnswerData =
-  | {
-      blocks?: Block[];
-      message?: string;
-      meta?: any;
+type AnswerPayload = {
+  intent: string;
+  summary: string;
+  evidence: Evidence[];
+  related_questions: string[];
+};
+
+export default function AnswerRenderer({ data }: { data: AnswerPayload }) {
+  const evidence = Array.isArray(data?.evidence) ? data.evidence : [];
+
+  // ✅ 표(table_html) 다음에 표 내용이 paragraph로 반복되는 중복 제거
+  const filtered = useMemo(() => {
+    const out: Evidence[] = [];
+    let lastTableText = "";
+
+    for (const ev of evidence) {
+      if (ev.block_type === "table_html") {
+        // table 텍스트를 공백 제거 형태로 저장해두고,
+        // 이후 paragraph가 표 안 내용(구분/내용/PM팀...)을 반복하면 제거한다.
+        lastTableText = (ev.content_text ?? "").replace(/\s+/g, "");
+        out.push(ev);
+        continue;
+      }
+
+      if (ev.block_type === "p" && lastTableText) {
+        const t = (ev.content_text ?? "").replace(/\s+/g, "");
+        // 너무 짧은 단어는 오탐이 많으니 2글자 이하 제외
+        if (t.length >= 3 && lastTableText.includes(t)) {
+          continue;
+        }
+      }
+
+      out.push(ev);
     }
-  | any;
 
-function safeText(s: any) {
-  return (s ?? "").toString();
-}
+    return out;
+  }, [evidence]);
 
-/** 매우 간단한 HTML sanitize: script/iframe 제거 정도만 */
-function sanitizeTableHtml(html: string) {
-  const x = html ?? "";
-  return x
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<iframe[\s\S]*?>[\s\S]*?<\/iframe>/gi, "");
-}
+  // ✅ “정확 출력” 원칙:
+  // - summary가 비어 있어도 evidence가 있으면 evidence를 보여준다.
+  // - evidence도 없으면 그때만 fallback 메시지.
+  const hasEvidence = filtered.length > 0;
 
-export default function AnswerRenderer({ data }: { data: AnswerData }) {
-  const blocks: Block[] = Array.isArray(data?.blocks) ? data.blocks : [];
-  const message = safeText(data?.message);
+  const fallback =
+    data?.summary?.trim() ||
+    "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
 
-  // 1) blocks가 없으면 message(또는 기본 폴백) 출력
-  if (!blocks.length) {
-    const text =
-      message ||
-      "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
-
+  if (!hasEvidence) {
     return (
-      <div className="prose prose-invert max-w-none">
-        <MarkdownView text={text} />
+      <div className="space-y-2">
+        <div className="text-sm leading-relaxed text-white/90">{fallback}</div>
       </div>
     );
   }
 
-  // 2) 파일명 표시(있으면)
-  const filename = blocks.find((b) => b.filename)?.filename;
-
   return (
-    <div className="space-y-3">
-      {filename && (
-        <div className="text-xs text-white/60">
-          근거 문서: <span className="font-semibold text-white/80">{filename}</span>
+    <div className="space-y-4">
+      {/* intent */}
+      {data?.intent ? (
+        <div className="text-xs text-white/55">
+          <span className="font-semibold text-white/70">분류</span>{" "}
+          <span className="text-white/65">{data.intent}</span>
         </div>
-      )}
+      ) : null}
 
+      {/* summary (있으면만 보여줌) */}
+      {data?.summary?.trim() ? (
+        <div className="rounded-2xl bg-white/5 p-3 text-sm leading-relaxed ring-1 ring-white/10">
+          {data.summary}
+        </div>
+      ) : null}
+
+      {/* evidence */}
       <div className="space-y-3">
-        {blocks.map((b, idx) => {
-          const kind = (b.kind ?? "").toString();
-          const text = b.text ?? "";
-          const tableHtml = b.table_html ?? "";
+        {filtered.map((ev, idx) => {
+          const key = `${ev.filename}_${idx}`;
 
-          // heading
-          if (kind === "heading") {
+          // 문단
+          if (ev.block_type === "p") {
+            const text = (ev.content_text ?? "").trim();
+            if (!text) return null;
+
             return (
               <div
-                key={(b.block_index ?? idx) + "_h"}
-                className="text-sm font-semibold text-white/90"
+                key={key}
+                className="rounded-2xl bg-white/5 p-3 text-sm leading-relaxed ring-1 ring-white/10"
               >
-                {text}
+                <div className="mb-1 text-[11px] text-white/45">
+                  근거: {ev.filename}
+                </div>
+                <div className="text-white/90 whitespace-pre-wrap">{text}</div>
               </div>
             );
           }
 
-          // table (table_html 우선)
-          if (kind === "table" && tableHtml) {
+          // 표 HTML
+          if (ev.block_type === "table_html") {
+            const html = (ev.content_html ?? "").trim();
+            if (!html) return null;
+
             return (
               <div
-                key={(b.block_index ?? idx) + "_t"}
-                className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10 overflow-auto"
+                key={key}
+                className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10"
               >
+                <div className="mb-2 text-[11px] text-white/45">
+                  근거(표): {ev.filename}
+                </div>
+
+                {/* table_html 그대로 렌더 (보존) */}
                 <div
-                  className="prose prose-invert max-w-none prose-table:my-0 prose-table:w-full"
-                  // eslint-disable-next-line react/no-danger
-                  dangerouslySetInnerHTML={{ __html: sanitizeTableHtml(tableHtml) }}
+                  className="overflow-auto rounded-xl bg-white/95 p-2 text-black"
+                  dangerouslySetInnerHTML={{ __html: html }}
                 />
-              </div>
-            );
-          }
 
-          // paragraph (기본)
-          if (text) {
-            return (
-              <div
-                key={(b.block_index ?? idx) + "_p"}
-                className="prose prose-invert max-w-none"
-              >
-                <MarkdownView text={text} />
+                {/* 표 스타일 최소 보정 */}
+                <style jsx>{`
+                  :global(table) {
+                    border-collapse: collapse;
+                    width: 100%;
+                    font-size: 13px;
+                  }
+                  :global(td),
+                  :global(th) {
+                    border: 1px solid rgba(0, 0, 0, 0.15);
+                    padding: 6px 8px;
+                    vertical-align: top;
+                  }
+                  :global(p) {
+                    margin: 0;
+                  }
+                `}</style>
               </div>
             );
           }
@@ -109,8 +149,26 @@ export default function AnswerRenderer({ data }: { data: AnswerData }) {
         })}
       </div>
 
-      {/* 관련 질문(suggest) 기능이 필요하면 여기서 버튼을 만들 수 있음
-          지금은 LLM 없음이라 meta에서 추천 질문을 생성하지 않으니 생략 */}
+      {/* related questions (있으면만) */}
+      {Array.isArray(data.related_questions) && data.related_questions.length > 0 ? (
+        <div className="pt-2">
+          <div className="text-xs font-semibold text-white/70 mb-2">관련 질문</div>
+          <div className="flex flex-wrap gap-2">
+            {data.related_questions.map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent("suggest", { detail: q }));
+                }}
+                className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
