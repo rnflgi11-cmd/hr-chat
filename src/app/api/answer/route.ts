@@ -30,8 +30,23 @@ export async function POST(req: NextRequest) {
   try {
     const sb = supabaseAdmin();
     const body = await req.json().catch(() => ({}));
-    const q = (body?.q ?? "").toString().trim();
-    if (!q) return NextResponse.json({ error: "q is required" }, { status: 400 });
+    const q =
+  (body?.q ??
+    body?.message ??
+    body?.question ??
+    body?.text ??
+    body?.prompt ??
+    body?.input ??
+    "") // 여기까지 모두 허용
+    .toString()
+    .trim();
+
+if (!q) {
+  return NextResponse.json(
+    { error: "q is required", received_keys: Object.keys(body ?? {}) },
+    { status: 400 }
+  );
+}
 
     // 1) tsv 기반 FTS: document_blocks만으로 1차 hit
     // websearch 문법을 흉내내기 위해 간단히 공백을 & 로 바꿈
