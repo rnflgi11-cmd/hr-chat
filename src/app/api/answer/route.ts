@@ -165,22 +165,33 @@ export async function POST(req: NextRequest) {
     //    - 표(table) 약간 가산
     // -----------------------------
     function scoreRow(r: Row) {
-      const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
-      let s = 0;
+  const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
+  let s = 0;
 
-      for (const t of used) {
-        if (!t) continue;
-        if (hay.includes(t)) s += 10 + Math.min(12, t.length * 2); // ✅ 길면 크게
-      }
+  for (const t of used) {
+    if (!t) continue;
+    if (hay.includes(t)) s += 10 + Math.min(12, t.length * 2);
+  }
 
-      // 질문 전체 문구 일부가 그대로 들어가면 추가 가산
-      const qCompact = q.replace(/\s+/g, "");
-      const hayCompact = hay.replace(/\s+/g, "");
-      if (qCompact.length >= 4 && hayCompact.includes(qCompact)) s += 25;
+  // 🔥 질문 전체 포함 시 가산
+  const qCompact = q.replace(/\s+/g, "");
+  const hayCompact = hay.replace(/\s+/g, "");
+  if (qCompact.length >= 4 && hayCompact.includes(qCompact)) s += 25;
 
-      if (r.kind === "table" && r.table_html) s += 6;
-      return s;
-    }
+  // 🔥 "며칠/일수/몇일" 질문이면 숫자+일 포함 블록에 강한 가산
+  if (/며칠|일수|몇일/.test(q)) {
+    if (/\d+\s*일/.test(hay)) s += 40; // 🔥 핵심 가중치
+  }
+
+  // 🔥 "얼마/금액/수당" 질문이면 숫자+원 가산
+  if (/얼마|금액|수당/.test(q)) {
+    if (/\d+[,0-9]*\s*원/.test(hay)) s += 40;
+  }
+
+  if (r.kind === "table" && r.table_html) s += 6;
+
+  return s;
+}
 
     // 문서 점수 합산
     const docScore = new Map<string, number>();
