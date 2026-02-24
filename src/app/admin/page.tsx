@@ -82,13 +82,32 @@ export default function AdminPage() {
       });
       const json = await res.json();
 
-      if (!res.ok) {
-        setMsg(json.error ?? "업로드 실패");
-        return;
-      }
-      setMsg("업로드 완료!");
-      setFiles([]);
-      await refresh();
+if (!res.ok) {
+  setMsg(json.error ?? "업로드 실패");
+  return;
+}
+
+const results = json.results ?? [];
+const okCount = results.filter((r: any) => r.ok).length;
+const fail = results.filter((r: any) => !r.ok);
+
+if (fail.length > 0) {
+  const lines = fail
+    .slice(0, 5)
+    .map((r: any) => `- ${r.filename}: ${r.error ?? "실패"}`)
+    .join("\n");
+
+  setMsg(
+    `부분 실패: 성공 ${okCount} / 실패 ${fail.length}\n` +
+      lines +
+      (fail.length > 5 ? `\n...외 ${fail.length - 5}건` : "")
+  );
+} else {
+  setMsg(`업로드 완료! (${okCount}개)`);
+  setFiles([]);
+}
+
+await refresh();
     } finally {
       setBusy(false);
     }
