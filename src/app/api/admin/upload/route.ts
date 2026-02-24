@@ -85,19 +85,41 @@ function tableToMarkdown($: cheerio.CheerioAPI, tableEl: any) {
   return normalizeNewlines([head, sep, body].join("\n"));
 }
 
+/**
+ * ✅ 핵심 변경:
+ * - table -> markdown 으로 만든 뒤 DOM에는 토큰만 남긴다
+ * - $.root().text() 이후 토큰을 markdown으로 치환해서 표 원형을 보존한다
+ */
 function htmlToTextPreserve(html: string) {
   const $ = cheerio.load(html ?? "");
 
-  $("table").each((_, el) => {
+  const tableMds: string[] = [];
+
+  $("table").each((i, el) => {
     const md = tableToMarkdown($, el);
     if (md) {
-      $(el).replaceWith(`<pre>${md}</pre>`);
+      tableMds.push(md);
+      // 토큰은 공백 정리에도 살아남게 "문자열"로 삽입
+      $(el).replaceWith(`\n\n[[__TABLE_${tableMds.length - 1}__]]\n\n`);
+    } else {
+      // 표 변환 실패 시에는 그냥 텍스트로 남김
+      $(el).replaceWith("\n");
     }
   });
 
   $("br").replaceWith("\n");
 
-  return normalizeNewlines($.root().text());
+  // ⚠️ cheerio .text()가 공백/줄바꿈을 정리하더라도, 토큰은 남는다
+  let text = normalizeNewlines($.root().text());
+
+  // 마지막에 토큰을 "원본 markdown 표"로 치환 (표는 여기서 완전히 복원)
+  for (let i = 0; i < tableMds.length; i++) {
+    const token = `[[__TABLE_${i}__]]`;
+    // 토큰 주변이 붙어버릴 수 있어 앞뒤에 줄을 충분히 확보
+    text = text.split(token).join(`\n\n${tableMds[i]}\n\n`);
+  }
+
+  return normalizeNewlines(text);
 }
 
 function chunkTextSmart(text: string, size = CHUNK_SIZE) {
@@ -130,15 +152,17 @@ function chunkTextSmart(text: string, size = CHUNK_SIZE) {
 async function fileToText(file: File, fileBuf: Buffer) {
   const name = (file.name || "").toLowerCase();
 
-  // ✅ DOCX (Node.js mammoth는 buffer 사용)
+  // DOCX
   if (name.endsWith(".docx")) {
     const { value: html } = await mammoth.convertToHtml({ buffer: fileBuf });
     return htmlToTextPreserve(html);
   }
 
-  // 나머지: Buffer -> 텍스트
+  // HTML
   const text = fileBuf.toString("utf-8");
   if (name.endsWith(".html") || name.endsWith(".htm")) return htmlToTextPreserve(text);
+
+  // TXT etc
   return normalizeNewlines(text);
 }
 
@@ -149,8 +173,12 @@ export async function POST(req: NextRequest) {
     const files = form.getAll("files") as File[];
 
     if (!files.length) {
+      return NextResponse.json({ error: "업로드할 파일이 없습니다." }, { status: 400 });
+    }
+
+    if (files.length > MAX_FILES_PER_REQUEST) {
       return NextResponse.json(
-        { error: "업로드할 파일이 없습니다." },
+        { error: `한 번에 최대 ${MAX_FILES_PER_REQUEST}개까지 업로드할 수 있어요.` },
         { status: 400 }
       );
     }
@@ -161,25 +189,18 @@ export async function POST(req: NextRequest) {
       const filename = file.name;
 
       try {
-        // ✅ 파일은 딱 한 번만 읽는다
         const ab = await file.arrayBuffer();
         const fileBuf = Buffer.from(ab);
 
         const key = safeStorageKey(filename);
 
-        const up = await supabaseAdmin.storage
-          .from(BUCKET)
-          .upload(key, fileBuf, {
-            contentType: file.type || "application/octet-stream",
-            upsert: false,
-          });
+        const up = await supabaseAdmin.storage.from(BUCKET).upload(key, fileBuf, {
+          contentType: file.type || "application/octet-stream",
+          upsert: false,
+        });
 
         if (up.error) {
-          results.push({
-            filename,
-            ok: false,
-            error: up.error.message,
-          });
+          results.push({ filename, ok: false, error: up.error.message });
           continue;
         }
 
@@ -198,7 +219,6 @@ export async function POST(req: NextRequest) {
           try {
             await supabaseAdmin.storage.from(BUCKET).remove([key]);
           } catch {}
-
           results.push({
             filename,
             ok: false,
@@ -209,7 +229,6 @@ export async function POST(req: NextRequest) {
 
         const docId = ins.data.id;
 
-        // ✅ 같은 arrayBuffer 재사용
         const extracted = await fileToText(file, fileBuf);
         const chunks = chunkTextSmart(extracted);
 
@@ -220,12 +239,7 @@ export async function POST(req: NextRequest) {
           try {
             await supabaseAdmin.storage.from(BUCKET).remove([key]);
           } catch {}
-
-          results.push({
-            filename,
-            ok: false,
-            error: "텍스트를 추출하지 못했어요.",
-          });
+          results.push({ filename, ok: false, error: "텍스트를 추출하지 못했어요." });
           continue;
         }
 
@@ -235,39 +249,21 @@ export async function POST(req: NextRequest) {
           content,
         }));
 
-        const insChunks = await supabaseAdmin
-          .from("document_chunks")
-          .insert(rows);
+        const insChunks = await supabaseAdmin.from("document_chunks").insert(rows);
 
         if (insChunks.error) {
-          results.push({
-            filename,
-            ok: false,
-            error: insChunks.error.message,
-          });
+          results.push({ filename, ok: false, error: insChunks.error.message });
           continue;
         }
 
-        results.push({
-          filename,
-          ok: true,
-          document_id: docId,
-          chunks: rows.length,
-        });
+        results.push({ filename, ok: true, document_id: docId, chunks: rows.length });
       } catch (e: any) {
-        results.push({
-          filename,
-          ok: false,
-          error: e?.message ?? "알 수 없는 오류",
-        });
+        results.push({ filename, ok: false, error: e?.message ?? "알 수 없는 오류" });
       }
     }
 
     return NextResponse.json({ ok: true, results });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? "서버 오류" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "서버 오류" }, { status: 500 });
   }
 }
