@@ -223,7 +223,7 @@ function chunkTextSmart(text: string, size = CHUNK_SIZE) {
 async function fileToText(file: File) {
   const name = (file.name || "").toLowerCase();
 
-  // DOCX
+  // ✅ DOCX
   if (name.endsWith(".docx")) {
     const ab = await file.arrayBuffer();
     const { value: html } = await mammoth.convertToHtml({ arrayBuffer: ab });
