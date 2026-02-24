@@ -276,15 +276,15 @@ export async function POST(req: NextRequest) {
 
         // 2) documents row
         const ins = await supabaseAdmin
-          .from("documents")
-          .insert({
-  filename,
-  storage_path: key,
-  content_type: file.type || null,
-  size_bytes: typeof file.size === "number" ? file.size : null,
-})
-          .select("id")
-          .single();
+  .from("documents")
+  .insert({
+    filename,
+    storage_path: key,
+    content_type: file.type || null,
+    size_bytes: file.size ?? null,
+  })
+  .select("id")
+  .single();
 
         if (ins.error || !ins.data?.id) {
           // storage 롤백
