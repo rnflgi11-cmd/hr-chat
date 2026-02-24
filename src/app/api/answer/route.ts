@@ -689,7 +689,7 @@ function buildAnswer(
   formatted.sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0));
 
   let body = formatted.map((h) => h.formatted).join("\n\n");
-  body = cleanText(body);
+  //body = cleanText(body);
   body = applyMarkdownHardBreaks(body);
 
   const sourceLines = uniq(formatted.map((h) => `- ${h.filename} / 조각 ${h.chunk_index}`)).join("\n");
