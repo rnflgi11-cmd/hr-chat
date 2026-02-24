@@ -20,28 +20,33 @@ type NormalizedPayload = {
 
 // ✅ 어떤 형태가 와도 안전하게 {answer, hits}로 정규화
 function normalizeData(data: unknown): NormalizedPayload {
-  // string이면 답변만
-  if (typeof data === "string") return { answer: data, hits: [] };
-
-  // null/undefined면 빈값
   if (!data) return { answer: "", hits: [] };
 
-  // object면 answer/hits 뽑기
-  if (typeof data === "object") {
-    const obj = data as any;
-    const answer =
-      typeof obj.answer === "string"
-        ? obj.answer
-        : typeof obj.content === "string"
-          ? obj.content
-          : "";
-
-    const hits = Array.isArray(obj.hits) ? (obj.hits as Block[]) : [];
-
-    return { answer, hits };
+  // 문자열이면 그대로
+  if (typeof data === "string") {
+    return { answer: data, hits: [] };
   }
 
-  // 그 외(숫자/불리언 등)
+  if (typeof data === "object") {
+    const obj = data as any;
+
+    // 🔥 서버에서 오는 형태 처리
+    // { intent, summary, evidence, related_questions }
+    if ("summary" in obj) {
+      return {
+        answer: String(obj.summary ?? ""),
+        hits: Array.isArray(obj.evidence) ? obj.evidence : [],
+      };
+    }
+
+    // 기존 형태 처리
+    return {
+      answer: typeof obj.answer === "string" ? obj.answer : "",
+      hits: Array.isArray(obj.hits) ? obj.hits : [],
+    };
+  }
+
+  
   return { answer: String(data), hits: [] };
 }
 
