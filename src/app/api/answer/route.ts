@@ -4,67 +4,116 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function sbAdmin() {
+function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL missing");
   if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
-
   return createClient(url, key, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
+    auth: { persistSession: false, autoRefreshToken: false },
   });
 }
 
-function detectIntent(q: string) {
-  if (/(연차|반차|시간연차|이월|촉진|발생|부여|안식년)/i.test(q)) return "휴가";
-  if (/(경조|결혼|조의|부고|장례|출산|배우자|경조금)/i.test(q)) return "경조";
-  if (/(예비군|민방위|병역|훈련)/i.test(q)) return "병역";
-  if (/(증명서|경력증명서|재직증명서)/i.test(q)) return "증명서";
-  if (/(자산|장비|지급|구매|사무용품)/i.test(q)) return "자산/구매";
-  return "일반";
-}
+const FALLBACK =
+  "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
+
+type Hit = {
+  id: string;
+  document_id: string;
+  block_index: number;
+  kind: string;
+  text: string | null;
+  table_html: string | null;
+};
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const question = (body?.question ?? "").toString().trim();
-  if (!question) return NextResponse.json({ error: "question required" }, { status: 400 });
+  try {
+    const sb = supabaseAdmin();
+    const body = await req.json().catch(() => ({}));
+    const q = (body?.q ?? "").toString().trim();
+    if (!q) return NextResponse.json({ error: "q is required" }, { status: 400 });
 
-  const intent = detectIntent(question);
-  const sb = sbAdmin();
+    // 1) tsv 기반 FTS: document_blocks만으로 1차 hit
+    // websearch 문법을 흉내내기 위해 간단히 공백을 & 로 바꿈
+    const fts = q
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((t: string) => t.replace(/[':()&|!]/g, "")) // tsquery 깨지는 문자 최소 제거
+      .filter(Boolean)
+      .join(" & ");
 
-  const { data: hits, error } = await sb.rpc("search_blocks", {
-    q: question,
-    limit_n: 8,
-  });
+    const { data: hits, error: e1 } = await sb
+      .from("document_blocks")
+      .select("id, document_id, block_index, kind, text, table_html")
+      .textSearch("tsv", fts, { type: "plain" })
+      .limit(14);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (e1) return NextResponse.json({ error: e1.message }, { status: 500 });
 
-  const top = (hits ?? []).slice(0, 4);
+    if (!hits || hits.length === 0) {
+      return NextResponse.json({ ok: true, blocks: [], message: FALLBACK });
+    }
 
-  const answer = {
-    intent,
-    summary:
-      top.length === 0
-        ? "규정집에서 질문과 직접 일치하는 근거를 찾지 못했어요. 다른 키워드로 다시 질문해 주세요."
-        : `(${intent}) 관련 규정 근거를 찾았어요. 아래 근거(표/문단)를 확인해 주세요.`,
-    evidence: top.map((h: any) => ({
-      filename: h.filename,
-      block_type: h.block_type,
-      content_text: h.content_text,
-      content_html: h.content_html,
-    })),
-    related_questions:
-      intent === "휴가"
-        ? ["안식년 기준은?", "연차 발생 기준은?", "연차 이월 기준은?"]
-        : intent === "경조"
-        ? ["경조휴가 일수는?", "경조금 지급 기준은?", "화환 신청 방법은?"]
-        : intent === "자산/구매"
-        ? ["자산/장비 지급 기준은?", "사무용품 구매 절차는?", "반납/회수 기준은?"]
-        : ["신청 절차는 어떻게 돼?", "예외 케이스가 있어?", "필요 서류는 뭐야?"],
-  };
+    // 2) 문서 pick: 가장 많이 hit된 문서
+    const countByDoc = new Map<string, number>();
+    for (const h of hits) countByDoc.set(h.document_id, (countByDoc.get(h.document_id) ?? 0) + 1);
 
-  return NextResponse.json({ ok: true, answer });
+    let bestDocId = hits[0].document_id;
+    let bestCount = -1;
+    for (const [docId, c] of countByDoc.entries()) {
+      if (c > bestCount) {
+        bestCount = c;
+        bestDocId = docId;
+      }
+    }
+
+    // 3) 파일명 조회
+    const { data: doc, error: eDoc } = await sb
+      .from("documents")
+      .select("id, filename")
+      .eq("id", bestDocId)
+      .single();
+
+    if (eDoc) return NextResponse.json({ error: eDoc.message }, { status: 500 });
+
+    // 4) 주변 문맥 window 확장
+    const topIndices = hits
+      .filter((h) => h.document_id === bestDocId)
+      .slice(0, 5)
+      .map((h) => h.block_index);
+
+    const minI = Math.max(0, Math.min(...topIndices) - 2);
+    const maxI = Math.max(...topIndices) + 2;
+
+    const { data: ctx, error: e2 } = await sb
+      .from("document_blocks")
+      .select("id, document_id, block_index, kind, text, table_html")
+      .eq("document_id", bestDocId)
+      .gte("block_index", minI)
+      .lte("block_index", maxI)
+      .order("block_index", { ascending: true });
+
+    if (e2) return NextResponse.json({ error: e2.message }, { status: 500 });
+
+    const blocks = (ctx ?? []).map((b: any) => ({
+      document_id: b.document_id,
+      filename: doc.filename,
+      block_id: b.id,
+      block_index: b.block_index,
+      kind: b.kind,
+      text: b.text ?? null,
+      table_html: b.table_html ?? null,
+    }));
+
+    return NextResponse.json({
+      ok: true,
+      blocks,
+      meta: {
+        picked_document: { id: bestDocId, filename: doc.filename, hitCount: bestCount },
+        window: { from: minI, to: maxI },
+      },
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message ?? "answer error" }, { status: 500 });
+  }
 }
