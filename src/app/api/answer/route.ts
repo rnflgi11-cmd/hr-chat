@@ -818,7 +818,11 @@ const chunks = (citations ?? []).map((c: any) => ({
   sim: c.sim,
 }));
 
-return NextResponse.json({ intent, answer, chunks });
+return NextResponse.json({
+  intent,
+  answer,
+  debug: answer
+});
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }
