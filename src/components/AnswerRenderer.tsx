@@ -30,7 +30,14 @@ function isHeadingLine(s: string) {
 }
 
 function makeSummary(evidence: Evidence[]) {
-  // LLM 없이 “의미있는 줄”을 3~6줄로 구성
+  // ✅ 표가 있으면 표를 우선 요약(며칠/일수 질문에 제일 정확)
+  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
+  if (table) {
+    // 표가 있으면 요약은 “표가 근거” 한 줄만 만들고, 실제 내용은 표가 보여주니까 OK
+    return ["아래 표에서 경조유형/대상별 휴가일수를 확인할 수 있습니다."];
+  }
+
+  // 표가 없으면 문단 중 “의미있는 줄” 3~6줄로 구성
   const lines: string[] = [];
 
   for (const ev of evidence) {
@@ -38,33 +45,23 @@ function makeSummary(evidence: Evidence[]) {
     const t = clean(ev.content_text ?? "");
     if (!t) continue;
 
-    // 너무 짧은 조각(카드처럼 보이게 만드는 원인) 제거
-    if (t.length < 6) continue;
+    // 너무 짧은 조각 제거
+    if (t.length < 10) continue;
+
+    // '문의:' 같은 안내는 요약에서 제외
+    if (/^문의[:：]/.test(t)) continue;
 
     // 중복 제거
     if (lines.includes(t)) continue;
 
-    // 제목/섹션 라인을 우선 포함
+    // 제목/섹션 라인 우선
     if (isHeadingLine(t)) lines.push(t);
     else if (lines.length < 6) lines.push(t);
 
     if (lines.length >= 6) break;
   }
 
-  // 제목만 잔뜩이면, 일반 문장도 조금 섞기
-  if (lines.filter(isHeadingLine).length >= 4) {
-    const extras = evidence
-      .filter((e) => e.block_type === "p")
-      .map((e) => clean(e.content_text ?? ""))
-      .filter((t) => t.length >= 10 && !isHeadingLine(t));
-
-    for (const ex of extras) {
-      if (lines.length >= 6) break;
-      if (!lines.includes(ex)) lines.push(ex);
-    }
-  }
-
-  return lines;
+  return lines.length ? lines : ["관련 내용을 찾았지만 요약할 문장을 구성하지 못했습니다. 아래 근거 원문을 확인해 주세요."];
 }
 
 export default function AnswerRenderer({ data }: { data: AnswerPayload }) {
@@ -85,6 +82,9 @@ export default function AnswerRenderer({ data }: { data: AnswerPayload }) {
       if (ev.block_type === "p" && lastTableText) {
         const t = (ev.content_text ?? "").replace(/\s+/g, "");
         if (t.length >= 3 && lastTableText.includes(t)) continue;
+        // ✅ 표 열 헤더 같은 단어는 그냥 제거(구분/대상/비고/휴가일수/첨부서류 등)
+const headerWords = new Set(["구분", "대상", "비고", "내용", "휴가일수", "첨부서류", "경조유형"]);
+if (headerWords.has((ev.content_text ?? "").trim())) continue;
       }
 
       out.push(ev);
