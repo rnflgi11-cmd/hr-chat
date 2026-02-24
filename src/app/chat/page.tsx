@@ -280,7 +280,7 @@ export default function ChatPage() {
                             <div className="grid gap-3">
                               {/* intent 출력 숨김 유지 */}
                               {m.content && (
-                                //<div className="prose prose-invert max-w-none">
+                                <div className="prose prose-invert max-w-none">
                                   <MarkdownView text={m.content} />
                                 </div>
                               )}
