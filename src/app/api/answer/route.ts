@@ -47,8 +47,10 @@ const SEARCH_MIN_SIM = 0.1;
 const WINDOW = 2;
 const MAX_TOKENS = 16;
 
-// ✅ 표가 길 때만 안전장치 (원하면 999로 늘려도 됨)
+// 표가 너무 길 때만 안전장치 (원하면 999로)
 const MAX_TABLE_ROWS = 80;
+// 표에서 “질문 관련 행”만 보여줄 때 최대 행 수
+const MAX_TABLE_MATCH_ROWS = 12;
 
 /** -----------------------------
  * Supabase
@@ -79,6 +81,34 @@ function hasAny(sl: string, kws: string[]) {
   return kws.some((k) => sl.includes(k.toLowerCase()));
 }
 
+function extractKinshipKeywords(qLower: string): string[] {
+  // 질문에 포함된 친족 키워드를 “표 행 매칭”에 유리하게 확장
+  const out: string[] = [];
+
+  const add = (...xs: string[]) => xs.forEach((x) => out.push(x));
+
+  // 외가
+  if (qLower.includes("외할머니") || qLower.includes("외조모")) add("외할머니", "외조모", "외조모상", "외조모(외할머니)");
+  if (qLower.includes("외할아버지") || qLower.includes("외조부")) add("외할아버지", "외조부", "외조부상", "외조부(외할아버지)");
+  if (qLower.includes("외조부모")) add("외조부모", "외할아버지", "외할머니", "외조부", "외조모");
+
+  // 친가
+  if (qLower.includes("할머니") || qLower.includes("조모")) add("할머니", "조모", "조모상");
+  if (qLower.includes("할아버지") || qLower.includes("조부")) add("할아버지", "조부", "조부상");
+  if (qLower.includes("조부모")) add("조부모", "조부", "조모", "할아버지", "할머니");
+
+  // 부모/자녀/형제
+  if (qLower.includes("부친") || qLower.includes("아버지")) add("부친", "아버지", "부");
+  if (qLower.includes("모친") || qLower.includes("어머니")) add("모친", "어머니", "모");
+  if (qLower.includes("배우자")) add("배우자", "남편", "아내", "처", "부인");
+  if (qLower.includes("자녀") || qLower.includes("아들") || qLower.includes("딸")) add("자녀", "아들", "딸");
+  if (qLower.includes("형") || qLower.includes("누나") || qLower.includes("오빠") || qLower.includes("언니") || qLower.includes("형제")) {
+    add("형제", "자매", "형", "누나", "오빠", "언니");
+  }
+
+  return uniq(out);
+}
+
 /** -----------------------------
  * Routing
  * ---------------------------- */
@@ -106,6 +136,7 @@ function routeQuestion(q: string): Routed {
     sl.includes("조의금") ||
     (sl.includes("경조") && (sl.includes("금") || sl.includes("얼마") || sl.includes("지급") || sl.includes("금액")));
 
+  // 0) 경조금(돈)
   if (isCondolenceMoney) {
     intent = "C";
     return {
@@ -116,6 +147,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 1) 연차수당(돈)
   if (isAnnualAllowance || hasAny(sl, ["연차수당", "연차비", "미사용", "정산"])) {
     intent = "B";
     return {
@@ -126,6 +158,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 2) 프로젝트 수당
   if (hasAny(sl, ["프로젝트", "상주", "pm팀", "개발자"]) && hasAny(sl, ["수당", "지급", "기준", "청구", "신청", "예시"])) {
     intent = "C";
     return {
@@ -136,7 +169,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-
+  // 3) 휴일근무 수당
   if (hasAny(sl, ["휴일근무", "공휴일", "토요일", "일요일"]) && hasAny(sl, ["수당", "지급", "금액", "계산", "신청"])) {
     intent = "C";
     return {
@@ -147,17 +180,18 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-
+  // 4) 근무 OFF
   if (hasAny(sl, ["근무off", "근무 off", "오프", "off", "심야", "야근"]) && hasAny(sl, ["신청", "기준", "사용", "대상"])) {
     intent = "C";
     return {
       intent,
       filenameHints: ["근무off제도", "근무off", "근무off제", "OFF"],
       tokens: uniq(["근무off", "심야", "22시", "4시간", "8시간", "익일", "신청", ...baseTokens]).slice(0, MAX_TOKENS),
-      mustContainAny: ["근무", "OFF", "4시간", "8시간", "22시"],
+      mustContainAny: ["근무", "off", "4시간", "8시간", "22시"],
     };
   }
 
+  // 5) 화환 신청
   if (hasAny(sl, ["화환"])) {
     intent = "C";
     return {
@@ -168,6 +202,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 6) 제증명서
   if (hasAny(sl, ["제증명", "증명서", "재직", "경력", "원천징수", "근로소득"])) {
     intent = "C";
     return {
@@ -178,34 +213,18 @@ function routeQuestion(q: string): Routed {
     };
   }
 
-  if (
-    hasAny(sl, [
-      "복리후생",
-      "즐기go",
-      "공부하go",
-      "건강챙기go",
-      "ott",
-      "여행",
-      "문화",
-      "테마파크",
-      "레포츠",
-      "운동",
-      "헬스",
-      "검진",
-      "chatgpt",
-      "gemini",
-      "챗gpt",
-    ])
-  ) {
+  // 7) 선택적 복리후생
+  if (hasAny(sl, ["복리후생", "즐기go", "공부하go", "건강챙기go", "ott", "여행", "문화", "테마파크", "레포츠", "운동", "헬스", "검진", "chatgpt", "gemini"])) {
     intent = "C";
     return {
       intent,
       filenameHints: ["선택적 복리후생 제도", "복리후생"],
       tokens: uniq(["복리후생", "공부하GO", "즐기GO", "건강챙기GO", "지원", "제외", ...baseTokens]).slice(0, MAX_TOKENS),
-      mustContainAny: ["지원", "대상", "신청", "불가", "제외", "GO"],
+      mustContainAny: ["지원", "대상", "신청", "불가", "제외", "go"],
     };
   }
 
+  // 8) 안식년 휴가
   if (hasAny(sl, ["안식년", "장기근속", "포상"])) {
     intent = "C";
     return {
@@ -216,6 +235,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 9) 자산/장비
   if (hasAny(sl, ["노트북", "모니터", "데스크탑", "장비", "자산", "고장", "교체"])) {
     intent = "C";
     return {
@@ -226,6 +246,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 10) 인재추천 포상
   if (hasAny(sl, ["인재추천", "추천", "포상", "채용추천"])) {
     intent = "C";
     return {
@@ -236,6 +257,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 11) 휴가규정(연차)
   if (hasAny(sl, ["연차", "반차", "시간연차", "이월", "차감", "선연차"])) {
     intent = "A";
     return {
@@ -247,38 +269,41 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 12) 휴가규정(경조) — ✅ 외조부/외할아버지/외조모/외할머니 포함
   if (
-  hasAny(sl, [
-    "경조",
-    "경조휴가",
-    "결혼",
-    "조위",
-    "부고",
-    "장례",
-    "출산",
-    "배우자",
-    "조부모",
-    "조부",
-    "조모",
-    "할아버지",
-    "할머니",
-    "외조부",
-    "외조모",
-    "외조부모",
-    "외할아버지",
-    "외할머니",
-  ])
-) {
-  intent = "C";
-  return {
-    intent,
-    filenameHints: ["휴가규정(연차,경조,공가)", "휴가규정", "휴가규정("],
-    tokens: uniq(["경조", "경조휴가", "조위", "장례", "외조부", "외할아버지", "첨부서류", ...baseTokens]).slice(0, MAX_TOKENS),
-    mustContainAny: ["경조", "경조휴가", "조위", "장례", "외조", "조부"],
-    sectionHeader: "📌 경조 휴가",
-  };
-}
+    hasAny(sl, [
+      "경조",
+      "경조휴가",
+      "결혼",
+      "조위",
+      "부고",
+      "장례",
+      "출산",
+      "배우자",
+      "조부모",
+      "조부",
+      "조모",
+      "할아버지",
+      "할머니",
+      "외조부",
+      "외조모",
+      "외조부모",
+      "외할아버지",
+      "외할머니",
+    ])
+  ) {
+    const kin = extractKinshipKeywords(sl);
+    intent = "C";
+    return {
+      intent,
+      filenameHints: ["휴가규정(연차,경조,공가)", "휴가규정", "휴가규정("],
+      tokens: uniq(["경조", "경조휴가", "조위", "장례", "첨부서류", ...kin, ...baseTokens]).slice(0, MAX_TOKENS),
+      mustContainAny: uniq(["경조", "휴가", "조위", "장례", ...kin]),
+      sectionHeader: "📌 경조 휴가",
+    };
+  }
 
+  // 13) 휴가규정(기타)
   if (hasAny(sl, ["민방위", "예비군", "공가", "병가", "직무교육"])) {
     intent = "C";
     return {
@@ -290,6 +315,7 @@ function routeQuestion(q: string): Routed {
     };
   }
 
+  // 디폴트
   return {
     intent,
     filenameHints: [],
@@ -300,11 +326,7 @@ function routeQuestion(q: string): Routed {
 /** -----------------------------
  * Doc ID lookup
  * ---------------------------- */
-async function findDocIdsByFilenameHints(
-  supabaseAdmin: SupabaseClient,
-  hints: string[],
-  limitPerHint = 5
-): Promise<string[]> {
+async function findDocIdsByFilenameHints(supabaseAdmin: SupabaseClient, hints: string[], limitPerHint = 5): Promise<string[]> {
   if (!hints?.length) return [];
   const out: string[] = [];
 
@@ -320,13 +342,11 @@ async function findDocIdsByFilenameHints(
       if (d?.id) out.push(d.id);
     }
   }
-
   return uniq(out);
 }
 
 /** -----------------------------
- * 표 복원 + 클린
- * ✅ 변경점: 코드펜스(```text) 제거하고 "마크다운 표"로만 출력
+ * 표 복원 (코드블록 제거하고 마크다운 표로만 출력)
  * ---------------------------- */
 function rebuildFlatTableWithContext(text: string): { rebuilt: string; hasTable: boolean } {
   const raw = (text ?? "")
@@ -482,9 +502,9 @@ function formatChunkContent(content: string): { text: string; hasTable: boolean 
 }
 
 /** -----------------------------
- * 발췌 정책(LLM 없이 AI처럼 보이게)
- * ✅ 핵심: 표는 "절대 발췌/자르지 않고" 전체 유지
- *         텍스트만 키워드 주변으로 발췌
+ * 발췌 정책
+ *  - 텍스트: 키워드 주변만
+ *  - 표: ✅ “질문 관련 행만” 우선, 매칭 실패 시 전체 표
  * ---------------------------- */
 function extractRelevantLines(text: string, tokens: string[], mustContainAny?: string[]) {
   const lines = (text ?? "")
@@ -494,20 +514,31 @@ function extractRelevantLines(text: string, tokens: string[], mustContainAny?: s
 
   if (!lines.length) return "";
 
-  // 표 인식(조금 넉넉하게)
+  const kws = uniq([...(mustContainAny ?? []), ...(tokens ?? [])]).filter((x) => (x ?? "").toString().trim().length >= 2);
+
+  // 표 인식(넉넉하게)
   const isMarkdownTable = lines.some((l) => l.trim().startsWith("|")) && lines.some((l) => /\|\s*---\s*\|/.test(l));
 
   if (isMarkdownTable) {
-    const headerIdx = lines.findIndex((l) => l.trim().startsWith("|"));
-    const header = headerIdx >= 0 ? lines[headerIdx] : lines[0];
+    const header = lines.find((l) => l.trim().startsWith("|")) ?? lines[0];
     const divider = lines.find((l) => /\|\s*---\s*\|/.test(l)) ?? "| --- |";
-
-    // row는 '|'로 시작하는 것만
     const rows = lines.filter((l) => l.trim().startsWith("|") && l !== header && l !== divider);
 
-    // ✅ 표는 전체 유지 (너무 길 때만 제한)
-    const keepRows = rows.length > MAX_TABLE_ROWS ? rows.slice(0, MAX_TABLE_ROWS) : rows;
+    // 1) 키워드 매칭 행만 우선 출력
+    if (kws.length) {
+      const matchedRows = rows.filter((r) => {
+        const rl = safeLower(r);
+        return kws.some((k) => rl.includes(safeLower(k)));
+      });
 
+      if (matchedRows.length) {
+        const keep = matchedRows.slice(0, MAX_TABLE_MATCH_ROWS);
+        return [header, divider, ...keep].join("\n");
+      }
+    }
+
+    // 2) 매칭이 없으면 전체 표(너무 길면 제한)
+    const keepRows = rows.length > MAX_TABLE_ROWS ? rows.slice(0, MAX_TABLE_ROWS) : rows;
     let table = [header, divider, ...keepRows].join("\n");
     if (rows.length > MAX_TABLE_ROWS) {
       table += `\n\n(표가 길어 일부 행만 표시했습니다. 더 구체적으로 질문하면 해당 항목 위주로 안내할게요.)`;
@@ -515,10 +546,9 @@ function extractRelevantLines(text: string, tokens: string[], mustContainAny?: s
     return table;
   }
 
-  const kws = uniq([...(mustContainAny ?? []), ...(tokens ?? [])]).filter((x) => (x ?? "").toString().trim().length >= 2);
+  // 일반 텍스트 발췌
   if (!kws.length) return lines.slice(0, 12).join("\n");
 
-  // 일반 텍스트: 매칭 줄 + 앞뒤 1줄
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const ll = safeLower(lines[i]);
@@ -602,7 +632,7 @@ function clampToSection(text: string, header?: string | null) {
 /** -----------------------------
  * Final hit filtering
  * ---------------------------- */
-function filterFinalHits(question: string, hits: Hit[], mustContainAny?: string[]) {
+function filterFinalHits(hits: Hit[], mustContainAny?: string[]) {
   if (!mustContainAny?.length) return hits;
   const filtered = hits.filter((h) => mustContainAny.some((k) => safeLower(h.content).includes(safeLower(k))));
   return filtered.length ? filtered : hits;
@@ -652,6 +682,7 @@ export async function POST(req: Request) {
     let bestDocId: string | null = null;
     let bestAnchor: { docId: string; chunk_index: number; content: string; sim: number; score?: number } | null = null;
 
+    // 후보 문서 내부 검색
     if (candidateDocIds.length) {
       for (const docId of candidateDocIds) {
         const res = await supabaseAdmin.rpc("search_chunks_in_document", {
@@ -689,6 +720,7 @@ export async function POST(req: Request) {
       }
     }
 
+    // 후보 문서에서 못 찾으면 전체 검색 fallback
     if (!bestDocId || !bestAnchor) {
       const first = await supabaseAdmin.rpc("search_chunks_text_v3", {
         q: question,
@@ -733,7 +765,7 @@ export async function POST(req: Request) {
     const windowChunks = await fetchWindowChunks(supabaseAdmin, bestDocId, fromIdx, toIdx, filename);
     if (!windowChunks?.length) return NextResponse.json({ intent, answer: FALLBACK, citations: [] });
 
-    let finalHits = filterFinalHits(question, windowChunks, mustContainAny);
+    let finalHits = filterFinalHits(windowChunks, mustContainAny);
     if (!finalHits.length) {
       finalHits = [windowChunks.find((h) => h.chunk_index === bestAnchor!.chunk_index) ?? windowChunks[0]];
     }

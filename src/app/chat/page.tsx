@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { clearSessionUser, loadSessionUser } from "@/lib/auth";
+import MarkdownView from "@/components/MarkdownView";
 
 type UserMsg = { role: "user"; content: string; ts: number };
 
@@ -255,7 +256,7 @@ export default function ChatPage() {
                           {m.role === "assistant" ? (
                             <div className="grid gap-3">
                               {/* intent 출력 숨김 유지 */}
-                              {m.content && <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>}
+                              {m.content && (  <div className="prose prose-invert max-w-none">    <MarkdownView text={m.content} />  </div>)}
 
                               {m.chunks && m.chunks.length > 0 && (
                                 <>
@@ -271,8 +272,10 @@ export default function ChatPage() {
                               )}
                             </div>
                           ) : (
-                            m.content
-                          )}
+  <div className="prose prose-invert max-w-none">
+    <MarkdownView text={m.content} />
+  </div>
+)}
                         </div>
                       </div>
                     </div>
