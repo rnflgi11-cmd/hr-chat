@@ -1,3 +1,4 @@
+// src/app/chat/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +19,7 @@ type AssistantMsg = {
   ts: number;
   intent?: "A" | "B" | "C";
   chunks?: Chunk[];
-  content?: string; // fallback 등
+  content?: string;
 };
 
 type Msg = UserMsg | AssistantMsg;
@@ -33,13 +34,15 @@ type AnswerResponse = {
 
 function ChunkCard({ c }: { c: Chunk }) {
   const [open, setOpen] = useState(false);
+
+  // 원문 정리: 줄바꿈 통일 + NBSP 제거 + 과한 공백/빈줄 정리
   const cleaned = (c.content ?? "")
-  .replace(/\r\n/g, "\n")                 // Windows -> Unix
-  .replace(/\r/g, "\n")                   // old Mac -> Unix
-  .replace(/\u00A0/g, " ")                // NBSP -> space
-  .replace(/[ \t]+\n/g, "\n")             // 줄끝 공백 제거
-  .replace(/\n{3,}/g, "\n\n")             // 과한 빈줄 축소
-  .trim();
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u00A0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
   return (
     <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
@@ -48,10 +51,13 @@ function ChunkCard({ c }: { c: Chunk }) {
           <div className="truncate text-xs font-semibold text-white/85">
             {c.filename}
           </div>
-          <div className="mt-0.5 text-[11px] text-white/45">조각 #{c.chunk_index}</div>
+          <div className="mt-0.5 text-[11px] text-white/45">
+            조각 #{c.chunk_index}
+          </div>
         </div>
 
         <button
+          type="button"
           onClick={() => setOpen((v) => !v)}
           className="shrink-0 rounded-full bg-white/6 px-3 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/10"
         >
@@ -64,16 +70,12 @@ function ChunkCard({ c }: { c: Chunk }) {
           원문은 접혀있어요. 필요할 때 “원문 보기”를 눌러 확인해 주세요.
         </div>
       ) : (
-        <pre
-  className="mt-3 text-xs leading-relaxed text-white/85"
-  style={{
-    whiteSpace: "pre-wrap",
-    overflowWrap: "anywhere",
-    wordBreak: "break-word",
-  }}
->
-  {cleaned}
-</pre>
+        // ✅ 표/리스트/링크 등 Markdown을 실제 렌더링 (pre로 찍지 않기)
+        <div className="mt-3">
+          <div className="prose prose-invert max-w-none">
+            <MarkdownView text={cleaned} />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -104,7 +106,10 @@ export default function ChatPage() {
     const text = q.trim();
     if (!text || sending || !user) return;
 
-    const next: Msg[] = [...messages, { role: "user", content: text, ts: Date.now() }];
+    const next: Msg[] = [
+      ...messages,
+      { role: "user", content: text, ts: Date.now() },
+    ];
     setMessages(next);
     setQ("");
     setSending(true);
@@ -121,7 +126,11 @@ export default function ChatPage() {
       if (!res.ok) {
         setMessages([
           ...next,
-          { role: "assistant", content: json.error ?? "오류가 발생했어요.", ts: Date.now() },
+          {
+            role: "assistant",
+            content: json.error ?? "오류가 발생했어요.",
+            ts: Date.now(),
+          },
         ]);
         return;
       }
@@ -157,7 +166,6 @@ export default function ChatPage() {
     clearSessionUser();
     window.location.href = "/";
   }
-  
 
   if (!user) return null;
 
@@ -210,6 +218,7 @@ export default function ChatPage() {
             )}
 
             <button
+              type="button"
               onClick={logout}
               className="rounded-2xl bg-white/6 px-3 py-2 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/10"
             >
@@ -218,7 +227,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Install hint (가벼운 제품 느낌) */}
+        {/* Install hint */}
         <div className="mt-4 rounded-3xl bg-white/5 p-4 ring-1 ring-white/10 backdrop-blur">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -237,7 +246,9 @@ export default function ChatPage() {
         <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-3xl bg-white/5 ring-1 ring-white/10 backdrop-blur">
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div className="text-sm font-semibold">대화</div>
-            <div className="text-xs text-white/55">질문을 입력하면 규정 원문을 함께 보여줘요</div>
+            <div className="text-xs text-white/55">
+              질문을 입력하면 규정 원문을 함께 보여줘요
+            </div>
           </div>
 
           {/* Messages */}
@@ -264,12 +275,15 @@ export default function ChatPage() {
                               ? "bg-gradient-to-r from-indigo-500/90 to-sky-500/90 text-white ring-white/10"
                               : "bg-white/6 text-white/90 ring-white/10",
                           ].join(" ")}
-                          style={{ whiteSpace: "pre-wrap" }}
                         >
                           {m.role === "assistant" ? (
                             <div className="grid gap-3">
                               {/* intent 출력 숨김 유지 */}
-                              {m.content && (  <div className="prose prose-invert max-w-none">    <MarkdownView text={m.content} />  </div>)}
+                              {m.content && (
+                                <div className="prose prose-invert max-w-none">
+                                  <MarkdownView text={m.content} />
+                                </div>
+                              )}
 
                               {m.chunks && m.chunks.length > 0 && (
                                 <>
@@ -278,17 +292,20 @@ export default function ChatPage() {
                                   </div>
                                   <div className="grid gap-3">
                                     {m.chunks.map((c, i) => (
-                                      <ChunkCard key={`${c.filename}-${c.chunk_index}-${i}`} c={c} />
+                                      <ChunkCard
+                                        key={`${c.filename}-${c.chunk_index}-${i}`}
+                                        c={c}
+                                      />
                                     ))}
                                   </div>
                                 </>
                               )}
                             </div>
                           ) : (
-  <div className="prose prose-invert max-w-none">
-    <MarkdownView text={m.content} />
-  </div>
-)}
+                            <div className="prose prose-invert max-w-none">
+                              <MarkdownView text={m.content} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -327,21 +344,26 @@ export default function ChatPage() {
                 />
 
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {["화환 신청 절차 알려줘", "경조휴가 며칠이야?", "기타휴가 종류 알려줘", "프로젝트 수당 기준 알려줘"].map(
-                    (t) => (
-                      <button
-                        key={t}
-                        onClick={() => setQ(t)}
-                        className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
-                      >
-                        {t}
-                      </button>
-                    )
-                  )}
+                  {[
+                    "화환 신청 절차 알려줘",
+                    "경조휴가 며칠이야?",
+                    "기타휴가 종류 알려줘",
+                    "프로젝트 수당 기준 알려줘",
+                  ].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setQ(t)}
+                      className="rounded-full bg-white/6 px-3 py-1.5 text-xs text-white/75 ring-1 ring-white/10 hover:bg-white/10"
+                    >
+                      {t}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <button
+                type="button"
                 onClick={send}
                 disabled={sending}
                 className="h-[52px] rounded-2xl bg-gradient-to-r from-indigo-500 to-sky-500 px-5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/15 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100"
@@ -352,9 +374,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="mt-4 text-center text-xs text-white/45">
-          © Covision HR Demo
-        </div>
+        <div className="mt-4 text-center text-xs text-white/45">© Covision HR Demo</div>
       </div>
     </div>
   );

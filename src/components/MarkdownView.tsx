@@ -33,7 +33,6 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "12px 0",
   },
 
-  // inline code
   codeInline: {
     fontFamily:
       'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -44,7 +43,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(255,255,255,0.12)",
   },
 
-  // code block
   pre: {
     margin: "10px 0",
     padding: "12px 14px",
@@ -54,7 +52,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "auto",
   },
 
-  // table
+  // ✅ 테이블: 작은 화면에서도 절대 깨지지 않게 "가로 스크롤" + "셀 줄바꿈" 허용
   tableWrap: { overflowX: "auto", margin: "10px 0" },
   table: {
     borderCollapse: "collapse",
@@ -74,6 +72,8 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(255,255,255,0.12)",
     padding: "8px 10px",
     verticalAlign: "top",
+    whiteSpace: "normal",
+    wordBreak: "break-word",
   },
 };
 
@@ -117,12 +117,12 @@ export default function MarkdownView({ text }: { text: string }) {
           ),
           hr: (props) => <hr style={styles.hr} {...props} />,
 
-          // ✅ react-markdown v9 대응: inline prop 없음
+          // react-markdown v9: inline prop 없음
           code({ children, ...props }) {
             const className = (props as any).className || "";
-            const isBlock = typeof className === "string" && className.includes("language-");
+            const isBlock =
+              typeof className === "string" && className.includes("language-");
 
-            // inline code
             if (!isBlock) {
               return (
                 <code style={styles.codeInline} {...props}>
@@ -131,7 +131,6 @@ export default function MarkdownView({ text }: { text: string }) {
               );
             }
 
-            // fenced code block
             return (
               <pre style={styles.pre}>
                 <code {...props}>{children}</code>
