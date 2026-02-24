@@ -18,28 +18,16 @@ function supabaseAdmin() {
 const FALLBACK =
   "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
 
-// DB row
 type Row = {
   id: string;
   document_id: string;
   block_index: number;
-  kind: string;
-  text: string | null;
-  table_html: string | null;
-};
-
-// API에서 blocks로 쓰는 shape(명시해서 TS implicit any 방지)
-type BlockOut = {
-  document_id: string;
-  filename: string;
-  block_id: string;
-  block_index: number;
   kind: string; // "paragraph" | "table" 등
   text: string | null;
   table_html: string | null;
+  tsv: any; // tsvector (select에 포함 안 해도 되지만 스키마상 존재)
 };
 
-// 프론트(ChatPage)가 기대하는 evidence shape
 type Evidence = {
   filename: string;
   block_type: "p" | "table_html";
@@ -78,57 +66,87 @@ function tokenize(q: string) {
     .filter((t) => t.length >= 2)
     .filter((t) => !stop.has(t));
 
+  // 긴 토큰 우선 (정확도)
   const uniq = Array.from(new Set(base)).sort((a, b) => b.length - a.length);
-  return uniq.slice(0, 2);
+
+  // 핵심 2~3개 (너무 많으면 일반 단어에 끌림)
+  return uniq.slice(0, 3);
+}
+
+function buildWebsearchQuery(q: string) {
+  // websearch_to_tsquery에 안전하게 넣기 위해 위험 문자 제거(최소)
+  return q.replace(/[':()&|!]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// ILIKE fallback 시 % _ escaping
+function escapeLike(s: string) {
+  return s.replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
 export async function POST(req: NextRequest) {
   try {
     const sb = supabaseAdmin();
     const body = await req.json().catch(() => ({}));
-
     const q = (body?.q ?? body?.question ?? "").toString().trim();
     if (!q) return NextResponse.json({ error: "q is required" }, { status: 400 });
 
     const terms = tokenize(q);
     const used = terms.length ? terms : [q];
 
-    // 1) 후보 히트 수집 (text + table_html 각각)
-    const all: Row[] = [];
+    // -----------------------------
+    // 1) FTS 1차 후보 수집 (tsv)
+    // -----------------------------
+    const webq = buildWebsearchQuery(q);
 
-    for (const t of used) {
-      const like = `%${t}%`;
-
+    let hits: Row[] = [];
+    if (webq) {
       const { data, error } = await sb
         .from("document_blocks")
         .select("id, document_id, block_index, kind, text, table_html")
-        .ilike("text", like)
-        .limit(120);
+        // ✅ 핵심: tsv 기반 전문검색
+        .textSearch("tsv", webq, { type: "websearch", config: "simple" })
+        .limit(80);
 
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      if (data?.length) all.push(...(data as Row[]));
-
-      const { data: data2, error: error2 } = await sb
-        .from("document_blocks")
-        .select("id, document_id, block_index, kind, text, table_html")
-        .ilike("table_html", like)
-        .limit(120);
-
-      if (error2) return NextResponse.json({ error: error2.message }, { status: 500 });
-      if (data2?.length) all.push(...(data2 as Row[]));
+      hits = (data ?? []) as Row[];
     }
 
-    // 2) 중복 제거
-    const seen = new Set<string>();
-    const hits: Row[] = [];
-    for (const r of all) {
-      if (!seen.has(r.id)) {
-        seen.add(r.id);
-        hits.push(r);
+    // -----------------------------
+    // 2) FTS가 0이면 ILIKE fallback
+    // -----------------------------
+    if (!hits.length) {
+      const all: Row[] = [];
+      for (const t of used) {
+        const like = `%${escapeLike(t)}%`;
+
+        const { data, error } = await sb
+          .from("document_blocks")
+          .select("id, document_id, block_index, kind, text, table_html")
+          .ilike("text", like)
+          .limit(120);
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        if (data?.length) all.push(...(data as Row[]));
+
+        const { data: data2, error: error2 } = await sb
+          .from("document_blocks")
+          .select("id, document_id, block_index, kind, text, table_html")
+          .ilike("table_html", like)
+          .limit(120);
+        if (error2) return NextResponse.json({ error: error2.message }, { status: 500 });
+        if (data2?.length) all.push(...(data2 as Row[]));
+      }
+
+      const seen = new Set<string>();
+      hits = [];
+      for (const r of all) {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          hits.push(r);
+        }
       }
     }
 
-    // ✅ 실패도 프론트가 읽는 answer 구조로 반환
+    // 없으면 fallback answer
     if (!hits.length) {
       return NextResponse.json({
         ok: true,
@@ -141,22 +159,36 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3) 점수화
+    // -----------------------------
+    // 3) 앱단 점수화 (FTS 후보 중에서 “정답 블록/문서” 선택)
+    //    - 긴 토큰 포함 시 가중치 크게
+    //    - 표(table) 약간 가산
+    // -----------------------------
     function scoreRow(r: Row) {
       const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
       let s = 0;
+
       for (const t of used) {
-        if (hay.includes(t)) s += 5 + Math.min(8, t.length);
+        if (!t) continue;
+        if (hay.includes(t)) s += 10 + Math.min(12, t.length * 2); // ✅ 길면 크게
       }
-      if (r.kind === "table" && r.table_html) s += 2;
+
+      // 질문 전체 문구 일부가 그대로 들어가면 추가 가산
+      const qCompact = q.replace(/\s+/g, "");
+      const hayCompact = hay.replace(/\s+/g, "");
+      if (qCompact.length >= 4 && hayCompact.includes(qCompact)) s += 25;
+
+      if (r.kind === "table" && r.table_html) s += 6;
       return s;
     }
 
+    // 문서 점수 합산
     const docScore = new Map<string, number>();
     for (const r of hits) {
       docScore.set(r.document_id, (docScore.get(r.document_id) ?? 0) + scoreRow(r));
     }
 
+    // best 문서 선택
     let bestDocId = hits[0].document_id;
     let bestScore = -1;
     for (const [docId, s] of docScore.entries()) {
@@ -166,7 +198,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4) 파일명
+    // 문서명
     const { data: doc, error: eDoc } = await sb
       .from("documents")
       .select("id, filename")
@@ -175,15 +207,16 @@ export async function POST(req: NextRequest) {
 
     if (eDoc) return NextResponse.json({ error: eDoc.message }, { status: 500 });
 
-    // 5) 문맥 window
-    const bestIndices = hits
+    // best 문서에서 “가장 점수 높은 블록” 중심으로 window 확장
+    const bestInDoc = hits
       .filter((r) => r.document_id === bestDocId)
-      .sort((a, b) => scoreRow(b) - scoreRow(a))
-      .slice(0, 6)
-      .map((r) => r.block_index);
+      .map((r) => ({ r, s: scoreRow(r) }))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 5);
 
-    const minI = Math.max(0, Math.min(...bestIndices) - 2);
-    const maxI = Math.max(...bestIndices) + 2;
+    const indices = bestInDoc.map((x) => x.r.block_index);
+    const minI = Math.max(0, Math.min(...indices) - 2);
+    const maxI = Math.max(...indices) + 3;
 
     const { data: ctx, error: e2 } = await sb
       .from("document_blocks")
@@ -195,30 +228,26 @@ export async function POST(req: NextRequest) {
 
     if (e2) return NextResponse.json({ error: e2.message }, { status: 500 });
 
-    // ✅ blocks 타입 명시 (TS 에러 방지)
-    const blocks: BlockOut[] = (ctx ?? []).map((b: any) => ({
-      document_id: b.document_id,
+    // evidence 변환 (프론트 AnswerRenderer가 읽는 형태)
+    const evidence: Evidence[] = (ctx ?? []).map((b: any) => ({
       filename: doc.filename,
-      block_id: b.id,
-      block_index: b.block_index,
-      kind: b.kind,
-      text: b.text ?? null,
-      table_html: b.table_html ?? null,
-    }));
-
-    // ✅ ChatPage(기존 프론트)가 기대하는 answer/evidence로 변환
-    const evidence: Evidence[] = blocks.map((b: BlockOut) => ({
-      filename: b.filename,
       block_type: b.kind === "table" ? "table_html" : "p",
       content_text: b.text ?? null,
       content_html: b.kind === "table" ? (b.table_html ?? null) : null,
     }));
 
+    // intent는 최소 분류(룰 기반)
+    const intent =
+      /경조|조위|결혼|부고|사망/.test(q) ? "경조/경조휴가" :
+      /연차|반차|휴가/.test(q) ? "휴가" :
+      /수당|정산|지급/.test(q) ? "수당/정산" :
+      "규정 검색 결과";
+
     return NextResponse.json({
       ok: true,
       answer: {
-        intent: "규정 검색 결과",
-        summary: "",
+        intent,
+        summary: "", // 렌더러에서 evidence 기반으로 사람답게 요약 중
         evidence,
         related_questions: [],
       },
