@@ -11,6 +11,19 @@ const BUCKET = "hr-docs";
 const MAX_FILES_PER_REQUEST = 30;
 const CHUNK_SIZE = 1200;
 
+function safeStorageKey(originalName: string) {
+  const name = (originalName || "file").toString().trim();
+
+  // 확장자만 보존
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+
+  // 키에는 안전한 문자만
+  const rand = Math.random().toString(16).slice(2);
+  const ts = Date.now();
+  return `${ts}_${rand}${ext || ".bin"}`;
+}
+
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -261,7 +274,7 @@ export async function POST(req: NextRequest) {
 
       try {
         // 1) storage 업로드
-        const key = `${Date.now()}_${Math.random().toString(16).slice(2)}_${filename}`;
+        const key = safeStorageKey(filename);
         const fileBuf = Buffer.from(await file.arrayBuffer());
 
         const up = await supabaseAdmin.storage.from(BUCKET).upload(key, fileBuf, {
