@@ -62,15 +62,15 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
 const evidenceAll = toEvidence(doc.filename, ctx);
 
 // ✅ hits는 보기 좋게 줄여서 내려보내기 (근거 폭발 방지)
-const evidence = dedupeAndPrioritizeEvidence(evidenceAll, 12);
+const evidenceAll = toEvidence(doc.filename, ctx);      // ✅ 답변 생성용(전체)
+const answer = buildSummary(intent, evidenceAll, q);    // ✅ 전체로 답변 만들기
 
-const answer = buildSummary(intent, evidenceAll, q); // ✅ 답변은 전체 근거로 더 잘 만들고
-// 또는 answer도 evidence로 만들고 싶으면 evidenceAll -> evidence 로 바꿔도 됨
+const evidenceUi = evidenceAll.slice(0, 12);            // ✅ 화면 표시용(12개만)
 
 return {
   ok: true,
   answer,
-  hits: evidence, // ✅ 화면 “근거 원문 보기”는 줄어든 근거만
+  hits: evidenceUi,
   meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
 };
 
