@@ -136,6 +136,8 @@ export function buildSummary(
       h.block_type === "table_html" &&
       (h.content_html ?? "").trim()
   );
+const isCatalog =
+    /(뭐|무엇|종류|전체|목록|항목|정리|한눈에|다 알려|뭐 있어)/.test(q);
 
   let body = "";
 
@@ -150,9 +152,29 @@ export function buildSummary(
     }
   }
 
-  // 🔹 표가 없으면 문단 기반 출력
-  if (!body.trim() && texts.length) {
-    body += texts.slice(0, 12).map((t) => `- ${t}`).join("\n");
+  // 🔹 문단 출력 (범위 질문이면 더 많이, 중복 제거)
+  if (texts.length) {
+    const limit = isCatalog ? 60 : 12;
+
+    const uniq: string[] = [];
+    const seen = new Set<string>();
+    for (const t of texts) {
+      const k = clean(t);
+      if (!k) continue;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(k);
+      if (uniq.length >= limit) break;
+    }
+
+    // 표가 이미 출력됐고(경조휴가/프로젝트수당 등), 범위 질문이면 문단도 이어 붙임
+    if (isCatalog && body.trim()) body += "\n\n";
+
+    // 표가 없으면 기본으로 문단 출력
+    // 범위 질문이면 표가 있어도 문단 출력
+    if (!body.trim() || isCatalog) {
+      body += uniq.map((t) => `- ${t}`).join("\n");
+    }
   }
 
   if (!body.trim()) {
