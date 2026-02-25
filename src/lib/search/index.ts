@@ -5,6 +5,7 @@ import { inferIntent, pickAnchors, tokenize, expandQueryTerms } from "./query";
 import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { SearchAnswer, Evidence } from "./types";
+import { tryExtractAnswer } from "./extract";
 
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
@@ -90,8 +91,10 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   });
 
   // ✅ 답변 생성용(전체 근거)
-  const evidenceAll = toEvidence(doc.filename, ctx);
-  const answer = buildSummary(intent, evidenceAll, q);
+ const evidenceAll = toEvidence(doc.filename, ctx);
+
+const extracted = tryExtractAnswer(intent, q, evidenceAll);
+const answer = extracted ?? buildSummary(intent, evidenceAll, q);
 
   // ✅ 화면 표시용(중복 제거 + 12개)
   const evidenceUi = dedupeAndPrioritizeEvidence(evidenceAll, 12);
