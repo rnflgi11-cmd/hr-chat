@@ -47,6 +47,13 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   // ✅ anchors 필터가 너무 빡세서 전부 날아가면 rawHits로 폴백
   let hits = filterByAnchors(rawHits, anchors);
   if (!hits.length) hits = rawHits;
+  // ✅ intent가 휴가 관련이면, 휴가/연차/경조 관련 문서만 우선 고려
+if (intent.includes("휴가")) {
+  const filtered = hits.filter(h =>
+    /휴가|연차|경조/.test(h.content_text ?? "")
+  );
+  if (filtered.length) hits = filtered;
+}  
 
   const scoreRow = makeScorer({ q, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
