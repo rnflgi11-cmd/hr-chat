@@ -5,6 +5,41 @@ import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
 import { SearchAnswer } from "./types";
 
+import type { Evidence } from "./types";
+
+function clampEvidence(evs: Evidence[], max = 10): Evidence[] {
+  return (evs ?? []).slice(0, Math.max(0, max));
+}
+
+/** 같은 문장/비슷한 문장 중복 제거 + p 우선 + table 1개 포함 */
+function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
+  const out: Evidence[] = [];
+  const seen = new Set<string>();
+
+  // table_html 하나는 보존(있으면)
+  const tables = evs.filter((e) => e.block_type === "table_html");
+  const ps = evs.filter((e) => e.block_type === "p");
+
+  // p 먼저: 중복 제거
+  for (const e of ps) {
+    const key = (e.content_text ?? "").replace(/\s+/g, " ").trim();
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+    if (out.length >= max) break;
+  }
+
+  // table 1개만 뒤에 추가 (이미 out가 꽉 차면 마지막 하나 교체)
+  if (tables.length) {
+    const t = tables[0];
+    if (out.length < max) out.push(t);
+    else out[max - 1] = t;
+  }
+
+  return out.slice(0, max);
+}
+
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const intent = inferIntent(q);
   const terms = tokenize(q);
@@ -24,13 +59,19 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const doc = await loadDocFilename(sb, bestDocId);
   const ctx = await buildWindowContext({ sb, q, bestDocId, hits, scoreRow });
 
-  const evidence = toEvidence(doc.filename, ctx);
-  const answer = buildSummary(intent, evidence, q);
+const evidenceAll = toEvidence(doc.filename, ctx);
 
-  return {
-    ok: true,
-    answer,
-    hits: evidence,
-    meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
-  };
+// ✅ hits는 보기 좋게 줄여서 내려보내기 (근거 폭발 방지)
+const evidence = dedupeAndPrioritizeEvidence(evidenceAll, 12);
+
+const answer = buildSummary(intent, evidenceAll, q); // ✅ 답변은 전체 근거로 더 잘 만들고
+// 또는 answer도 evidence로 만들고 싶으면 evidenceAll -> evidence 로 바꿔도 됨
+
+return {
+  ok: true,
+  answer,
+  hits: evidence, // ✅ 화면 “근거 원문 보기”는 줄어든 근거만
+  meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
+};
+
 }
