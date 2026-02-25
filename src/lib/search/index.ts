@@ -48,12 +48,13 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   let hits = filterByAnchors(rawHits, anchors);
   if (!hits.length) hits = rawHits;
   // ✅ intent가 휴가 관련이면, 휴가/연차/경조 관련 문서만 우선 고려
-if (intent.includes("휴가")) {
-  const filtered = hits.filter(h =>
-    /휴가|연차|경조/.test(h.content_text ?? "")
-  );
+  
+if (/휴가/.test(intent)) {
+  const filtered = hits
+    .filter((h) => /휴가|연차|경조/.test(h.text ?? ""))
+    .filter((h) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(h.text ?? ""));
   if (filtered.length) hits = filtered;
-}  
+}
 
   const scoreRow = makeScorer({ q, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
