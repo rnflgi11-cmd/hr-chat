@@ -14,7 +14,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const { sb, hits: rawHits } = await retrieveCandidates(q, used);
 
   if (!rawHits.length) {
-    return { ok: true, answer: buildSummary(intent, []), hits: [], meta: { intent } };
+    return { ok: true, answer: buildSummary(intent, [], q), hits: [], meta: { intent } };
   }
 
   const hits = filterByAnchors(rawHits, anchors);
@@ -25,7 +25,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const ctx = await buildWindowContext({ sb, q, bestDocId, hits, scoreRow });
 
   const evidence = toEvidence(doc.filename, ctx);
-  const answer = buildSummary(intent, evidence);
+  const answer = buildSummary(intent, evidence, q);
 
   return {
     ok: true,
