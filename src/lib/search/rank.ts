@@ -39,17 +39,27 @@ export function makeScorer(params: { q: string; used: string[]; anchors: string[
   };
 }
 
-export function pickBestDocId(hits: Row[], scoreRow: (r: Row) => number) {
-  const docScore = new Map<string, number>();
-  for (const r of hits) docScore.set(r.document_id, (docScore.get(r.document_id) ?? 0) + scoreRow(r));
+export function pickBestDocId(
+  hits: Row[],
+  scoreRow: (r: Row) => number
+): string {
+  const scoreMap = new Map<string, number>();
 
-  let bestDocId = hits[0].document_id;
-  let bestScore = -1;
-  for (const [docId, s] of docScore.entries()) {
-    if (s > bestScore) {
-      bestScore = s;
+  for (const h of hits) {
+    const s = scoreRow(h);
+    const prev = scoreMap.get(h.document_id) ?? 0;
+    scoreMap.set(h.document_id, prev + s); // ✅ 문서 전체 점수 합산
+  }
+
+  let bestDocId = "";
+  let bestScore = -Infinity;
+
+  for (const [docId, totalScore] of scoreMap.entries()) {
+    if (totalScore > bestScore) {
+      bestScore = totalScore;
       bestDocId = docId;
     }
   }
+
   return bestDocId;
 }
