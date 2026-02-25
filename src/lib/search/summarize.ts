@@ -75,6 +75,7 @@ function formatTableAsList(rows: string[][]): string {
   const iDays = idx(/일수|기간|휴가일/);
   const iMoney = idx(/금액|원|만원|지급/);
   const iNote = idx(/비고|참고/);
+  const iDoc = idx(/첨부|서류|증빙|제출/);
 
   const pick = (r: string[], i: number) =>
     i >= 0 && i < r.length ? r[i] : "";
@@ -97,9 +98,14 @@ function formatTableAsList(rows: string[][]): string {
     const note = pick(r, iNote);
 
     let tail = "";
-    if (days) tail += `: ${days}`;
-    else if (money) tail += `: ${money}`;
-    if (note) tail += ` (${note})`;
+
+if (days) tail += `: ${days}`;
+else if (money) tail += `: ${money}`;
+
+const doc = pick(r, iDoc);
+if (doc) tail += ` / 첨부서류: ${doc}`;
+
+if (note) tail += ` (${note})`;
 
     const head =
       parts.filter(Boolean).join(" · ").trim() ||
