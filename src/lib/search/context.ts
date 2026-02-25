@@ -1,7 +1,12 @@
+// search/context.ts
 import { Evidence, Row } from "./types";
 
 export async function loadDocFilename(sb: any, docId: string) {
-  const { data, error } = await sb.from("documents").select("id, filename").eq("id", docId).single();
+  const { data, error } = await sb
+    .from("documents")
+    .select("id, filename")
+    .eq("id", docId)
+    .single();
   if (error) throw new Error(error.message);
   return data as { id: string; filename: string };
 }
@@ -12,9 +17,24 @@ export async function buildWindowContext(params: {
   bestDocId: string;
   hits: Row[];
   scoreRow: (r: Row) => number;
+  isCatalog?: boolean; // ✅ 추가
 }) {
-  const { sb, q, bestDocId, hits, scoreRow } = params;
+  const { sb, q, bestDocId, hits, scoreRow, isCatalog } = params;
 
+  // ✅ (핵심) 카탈로그 질문이면 문서에서 넓게 가져온다: 누락 방지
+  if (isCatalog) {
+    const { data, error } = await sb
+      .from("document_blocks")
+      .select("id, document_id, block_index, kind, text, table_html")
+      .eq("document_id", bestDocId)
+      .order("block_index", { ascending: true })
+      .limit(500);
+
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  }
+
+  // ---- 이하 기존 로직 유지 ----
   const isDayQuestion = /며칠|일수|몇일/.test(q);
 
   let minI = 0;
@@ -25,6 +45,19 @@ export async function buildWindowContext(params: {
     .map((r) => ({ r, s: scoreRow(r) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 6);
+
+  // bestInDoc가 비는 경우 방어 (가끔 bestDocId만 잡히고 hits가 없을 수 있음)
+  if (!bestInDoc.length) {
+    const { data, error } = await sb
+      .from("document_blocks")
+      .select("id, document_id, block_index, kind, text, table_html")
+      .eq("document_id", bestDocId)
+      .order("block_index", { ascending: true })
+      .limit(120);
+
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  }
 
   const baseIndices = bestInDoc.map((x) => x.r.block_index);
   const baseMin = Math.max(0, Math.min(...baseIndices) - 2);
@@ -120,5 +153,7 @@ export function toEvidence(filename: string, ctx: any[]): Evidence[] {
     content_html: b.kind === "table" ? (b.table_html ?? null) : null,
   })) as Evidence[];
 
-  return ev.slice(0, 14);
+  // ✅ 카탈로그면 더 많이 넘겨도 괜찮지만, UI는 12개로 또 자름.
+  // summarize용 evidenceAll은 여기서 너무 과하게 자르지 않는게 유리.
+  return ev.slice(0, 80);
 }
