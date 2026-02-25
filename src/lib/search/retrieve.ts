@@ -1,4 +1,3 @@
-// lib/search/retrieve.ts
 import { supabaseAdmin as sb } from "../supabaseAdmin";
 import type { Row } from "./types";
 
@@ -12,7 +11,6 @@ export async function retrieveCandidates(q: string, used: string[]) {
   ).slice(0, 12);
 
   const orParts: string[] = [];
-
   for (const t of terms) {
     if (t.length <= 1) continue;
     const esc = t.replace(/%/g, "\\%").replace(/_/g, "\\_");
@@ -36,7 +34,5 @@ export async function retrieveCandidates(q: string, used: string[]) {
 
   if (error) throw new Error(error.message);
 
-  const hits = (data ?? []) as Row[];
-
-  return { sb, hits };
+  return { sb, hits: (data ?? []) as Row[] };
 }

@@ -1,4 +1,5 @@
 export type Row = {
+  content_text: string;
   id: string;
   document_id: string;
   block_index: number;

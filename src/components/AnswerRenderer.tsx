@@ -2,18 +2,53 @@
 
 import React, { useMemo, useState } from "react";
 
-type Evidence = {
-  filename: string;
-  block_type: "p" | "table_html";
-  content_text?: string | null;
-  content_html?: string | null;
+type Block = {
+  id?: string;
+  document_id?: string;
+  block_index?: number;
+  kind?: "paragraph" | "table";
+  text?: string | null;
+  table_html?: string | null;
+  tsv?: string | null;
+  filename?: string | null;
 };
 
-type AnswerContent = {
+type NormalizedPayload = {
   answer: string;
-  hits: Evidence[];
-  meta?: { intent?: string };
+  hits: Block[];
 };
+
+// ✅ 어떤 형태가 와도 안전하게 {answer, hits}로 정규화
+function normalizeData(data: unknown): NormalizedPayload {
+  if (!data) return { answer: "", hits: [] };
+
+  // 문자열이면 그대로
+  if (typeof data === "string") {
+    return { answer: data, hits: [] };
+  }
+
+  if (typeof data === "object") {
+    const obj = data as any;
+
+    // 🔥 서버에서 오는 형태 처리
+    // { intent, summary, evidence, related_questions }
+    if ("summary" in obj) {
+      return {
+        answer: String(obj.summary ?? ""),
+        hits: Array.isArray(obj.evidence) ? obj.evidence : [],
+      };
+    }
+
+    // 기존 형태 처리
+    return {
+      answer: typeof obj.answer === "string" ? obj.answer : "",
+      hits: Array.isArray(obj.hits) ? obj.hits : [],
+    };
+  }
+
+  
+  return { answer: String(data), hits: [] };
+}
 
 function clampText(s: string, max = 520) {
   const t = (s ?? "").trim();
@@ -25,12 +60,12 @@ function SafeHTML({ html }: { html: string }) {
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export default function AnswerRenderer({ data }: { data: AnswerContent }) {
-  const [showSources, setShowSources] = useState(false);
+export default function AnswerRenderer({ data }: { data: unknown }) {
+  const payload = useMemo(() => normalizeData(data), [data]);
 
-  const answer = (data?.answer ?? "").trim();
-  const hits = data?.hits ?? [];
-  const intent = data?.meta?.intent ?? "";
+  const [showSources, setShowSources] = useState(false);
+  const answer = (payload.answer ?? "").trim();
+  const hits = payload.hits ?? [];
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -49,11 +84,6 @@ export default function AnswerRenderer({ data }: { data: AnswerContent }) {
         }}
       >
         {answer || "답변을 생성하지 못했습니다."}
-        {intent ? (
-          <div style={{ marginTop: 8, fontSize: 12, color: "rgba(229,231,235,0.55)" }}>
-            intent: {intent}
-          </div>
-        ) : null}
       </div>
 
       {/* 근거 토글 */}
@@ -79,10 +109,11 @@ export default function AnswerRenderer({ data }: { data: AnswerContent }) {
         </div>
       </div>
 
+      {/* 근거 리스트 */}
       {showSources && (
         <div style={{ display: "grid", gap: 10 }}>
-          {hits.map((e, idx) => (
-            <SourceBlock key={`${e.filename}-${idx}`} e={e} idx={idx} />
+          {hits.map((b, idx) => (
+            <SourceBlock key={(b.id as string) ?? `${idx}`} b={b} idx={idx} />
           ))}
         </div>
       )}
@@ -90,9 +121,11 @@ export default function AnswerRenderer({ data }: { data: AnswerContent }) {
   );
 }
 
-function SourceBlock({ e, idx }: { e: Evidence; idx: number }) {
+function SourceBlock({ b, idx }: { b: Block; idx: number }) {
   const [open, setOpen] = useState(false);
-  const isTable = e.block_type === "table_html";
+
+  const kind = b.kind ?? (b.table_html ? "table" : "paragraph");
+  const title = kind === "table" ? "표" : "원문";
 
   return (
     <div
@@ -101,16 +134,19 @@ function SourceBlock({ e, idx }: { e: Evidence; idx: number }) {
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.08)",
         padding: 12,
-        overflow: "visible",
+        overflow: "visible", // ✅ 짤림 방지
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, color: "rgba(229,231,235,0.55)" }}>
-            {(e.filename ?? "문서") + ` · #${idx}`}
+            {(b.filename ?? "문서") +
+              (typeof b.block_index === "number"
+                ? ` · #${b.block_index}`
+                : ` · #${idx}`)}
           </div>
           <div style={{ fontSize: 14, fontWeight: 800, color: "#e5e7eb" }}>
-            {isTable ? "표" : "원문"}
+            {title}
           </div>
         </div>
 
@@ -135,17 +171,17 @@ function SourceBlock({ e, idx }: { e: Evidence; idx: number }) {
 
       {open && (
         <div style={{ marginTop: 10 }}>
-          {isTable ? <TableBlock html={e.content_html ?? ""} /> : <ParagraphBlock text={e.content_text ?? ""} />}
+          {kind === "table" ? <TableBlock b={b} /> : <ParagraphBlock b={b} />}
         </div>
       )}
     </div>
   );
 }
 
-function ParagraphBlock({ text }: { text: string }) {
-  const raw = (text ?? "").trim();
+function ParagraphBlock({ b }: { b: Block }) {
+  const raw = (b.text ?? "").trim();
   const [more, setMore] = useState(false);
-  const { text: clamped, clamped: isClamped } = useMemo(() => clampText(raw, 520), [raw]);
+  const { text, clamped } = useMemo(() => clampText(raw, 520), [raw]);
 
   return (
     <div>
@@ -159,10 +195,10 @@ function ParagraphBlock({ text }: { text: string }) {
           fontSize: 13,
         }}
       >
-        {more ? raw : clamped}
+        {more ? raw : text}
       </div>
 
-      {isClamped && (
+      {clamped && (
         <button
           onClick={() => setMore((v) => !v)}
           style={{
@@ -184,8 +220,9 @@ function ParagraphBlock({ text }: { text: string }) {
   );
 }
 
-function TableBlock({ html }: { html: string }) {
-  const h = (html ?? "").trim();
+function TableBlock({ b }: { b: Block }) {
+  const html = (b.table_html ?? "").trim();
+
   return (
     <div
       style={{
@@ -193,15 +230,15 @@ function TableBlock({ html }: { html: string }) {
         background: "rgba(255,255,255,0.03)",
         border: "1px solid rgba(255,255,255,0.10)",
         padding: 10,
-        overflowX: "auto",
+        overflowX: "auto", // ✅ 가로 스크롤로 짤림 해결
         overflowY: "auto",
         maxHeight: 520,
         WebkitOverflowScrolling: "touch",
       }}
     >
-      {h ? (
+      {html ? (
         <div style={{ minWidth: 680 }}>
-          <SafeHTML html={h} />
+          <SafeHTML html={html} />
         </div>
       ) : (
         <div style={{ color: "rgba(229,231,235,0.7)", fontSize: 12 }}>
