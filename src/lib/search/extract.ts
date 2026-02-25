@@ -79,7 +79,20 @@ export function tryExtractAnswer(q: string, intent: string, evidenceAll: Evidenc
   if (!lines.length) return null;
 
   const isDayQ = /며칠|일수|몇일/.test(question);
+// 3) "기준/조건/요건/설명" 질문 처리
+  if (/기준|조건|요건|설명|어떻게/.test(question)) {
+    const idx = lines.findIndex(l =>
+      l.includes("안식년") ||
+      l.includes("기준") ||
+      l.includes("휴가 발생 기준")
+    );
 
+    if (idx >= 0) {
+      const slice = lines.slice(idx, idx + 10);
+      return slice.map(x => `- ${x}`).join("\n");
+    }
+  }
+  
   // 1) 경조/휴가 관련 + 일수 질문: "\d+일" 들어간 라인을 우선 뽑기
   if (isDayQ && /휴가|경조|출산|조위|결혼/.test(intent + " " + question)) {
     const cand = lines
