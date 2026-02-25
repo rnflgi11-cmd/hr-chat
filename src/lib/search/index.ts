@@ -59,8 +59,6 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const doc = await loadDocFilename(sb, bestDocId);
   const ctx = await buildWindowContext({ sb, q, bestDocId, hits, scoreRow });
 
-const evidenceAll = toEvidence(doc.filename, ctx);
-
 // ✅ hits는 보기 좋게 줄여서 내려보내기 (근거 폭발 방지)
 const evidenceAll = toEvidence(doc.filename, ctx);      // ✅ 답변 생성용(전체)
 const answer = buildSummary(intent, evidenceAll, q);    // ✅ 전체로 답변 만들기
