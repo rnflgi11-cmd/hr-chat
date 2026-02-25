@@ -25,15 +25,24 @@ type Row = {
   kind: string; // "paragraph" | "table" 등
   text: string | null;
   table_html: string | null;
-  tsv: any; // tsvector (select에 포함 안 해도 되지만 스키마상 존재)
+  tsv: any;
 };
 
-type Evidence = {
+export type Evidence = {
   filename: string;
   block_type: "p" | "table_html";
   content_text?: string | null;
   content_html?: string | null;
 };
+
+function okAnswer(params: { answer: string; hits: Evidence[]; intent: string }) {
+  return {
+    ok: true as const,
+    answer: params.answer,
+    hits: params.hits,
+    meta: { intent: params.intent },
+  };
+}
 
 function tokenize(q: string) {
   const stop = new Set([
@@ -66,21 +75,33 @@ function tokenize(q: string) {
     .filter((t) => t.length >= 2)
     .filter((t) => !stop.has(t));
 
-  // 긴 토큰 우선 (정확도)
   const uniq = Array.from(new Set(base)).sort((a, b) => b.length - a.length);
-
-  // 핵심 2~3개 (너무 많으면 일반 단어에 끌림)
   return uniq.slice(0, 3);
 }
 
 function buildWebsearchQuery(q: string) {
-  // websearch_to_tsquery에 안전하게 넣기 위해 위험 문자 제거(최소)
   return q.replace(/[':()&|!]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// ILIKE fallback 시 % _ escaping
 function escapeLike(s: string) {
   return s.replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+// ✅ LLM 없이 summary 만드는 규칙(간단하지만 UX 안정화)
+function buildSummary(intent: string, evidence: Evidence[], q: string) {
+  const p = evidence.find((e) => e.block_type === "p" && (e.content_text ?? "").trim());
+  const hasTable = evidence.some((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
+
+  if (!evidence.length) return FALLBACK;
+
+  const head = `[${intent}]`;
+  if (p && hasTable) return `${head}\n${p.content_text}\n\n아래 표를 참고하세요.`;
+  if (p) return `${head}\n${p.content_text}`;
+  if (hasTable) return `${head}\n아래 표를 참고하세요.`;
+
+  // 마지막 방어
+  const any = evidence[0]?.content_text?.trim();
+  return `${head}\n${any ?? `관련 근거를 찾았습니다. 근거 원문을 확인하세요.`}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -103,7 +124,6 @@ export async function POST(req: NextRequest) {
       const { data, error } = await sb
         .from("document_blocks")
         .select("id, document_id, block_index, kind, text, table_html")
-        // ✅ 핵심: tsv 기반 전문검색
         .textSearch("tsv", webq, { type: "websearch", config: "simple" })
         .limit(80);
 
@@ -146,52 +166,52 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 없으면 fallback answer
+    // ✅ intent는 최소 분류(룰 기반)
+    const intent =
+      /경조|조위|결혼|부고|사망/.test(q) ? "경조/경조휴가" :
+      /연차|반차|휴가/.test(q) ? "휴가" :
+      /수당|정산|지급/.test(q) ? "수당/정산" :
+      "규정 검색 결과";
+
+    // 없으면 fallback answer (✅ 표준 응답 형태로 고정)
     if (!hits.length) {
-      return NextResponse.json({
-        ok: true,
-        answer: {
-          intent: "규정 검색 결과",
-          summary: FALLBACK,
-          evidence: [] as Evidence[],
-          related_questions: [] as string[],
-        },
-      });
+      return NextResponse.json(
+        okAnswer({
+          intent,
+          answer: FALLBACK,
+          hits: [],
+        })
+      );
     }
 
     // -----------------------------
     // 3) 앱단 점수화 (FTS 후보 중에서 “정답 블록/문서” 선택)
-    //    - 긴 토큰 포함 시 가중치 크게
-    //    - 표(table) 약간 가산
     // -----------------------------
     function scoreRow(r: Row) {
-  const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
-  let s = 0;
+      const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
+      let s = 0;
 
-  for (const t of used) {
-    if (!t) continue;
-    if (hay.includes(t)) s += 10 + Math.min(12, t.length * 2);
-  }
+      for (const t of used) {
+        if (!t) continue;
+        if (hay.includes(t)) s += 10 + Math.min(12, t.length * 2);
+      }
 
-  // 🔥 질문 전체 포함 시 가산
-  const qCompact = q.replace(/\s+/g, "");
-  const hayCompact = hay.replace(/\s+/g, "");
-  if (qCompact.length >= 4 && hayCompact.includes(qCompact)) s += 25;
+      const qCompact = q.replace(/\s+/g, "");
+      const hayCompact = hay.replace(/\s+/g, "");
+      if (qCompact.length >= 4 && hayCompact.includes(qCompact)) s += 25;
 
-  // 🔥 "며칠/일수/몇일" 질문이면 숫자+일 포함 블록에 강한 가산
-  if (/며칠|일수|몇일/.test(q)) {
-    if (/\d+\s*일/.test(hay)) s += 40; // 🔥 핵심 가중치
-  }
+      if (/며칠|일수|몇일/.test(q)) {
+        if (/\d+\s*일/.test(hay)) s += 40;
+      }
 
-  // 🔥 "얼마/금액/수당" 질문이면 숫자+원 가산
-  if (/얼마|금액|수당/.test(q)) {
-    if (/\d+[,0-9]*\s*원/.test(hay)) s += 40;
-  }
+      if (/얼마|금액|수당/.test(q)) {
+        if (/\d+[,0-9]*\s*원/.test(hay)) s += 40;
+      }
 
-  if (r.kind === "table" && r.table_html) s += 6;
+      if (r.kind === "table" && r.table_html) s += 6;
 
-  return s;
-}
+      return s;
+    }
 
     // 문서 점수 합산
     const docScore = new Map<string, number>();
@@ -218,69 +238,59 @@ export async function POST(req: NextRequest) {
 
     if (eDoc) return NextResponse.json({ error: eDoc.message }, { status: 500 });
 
-    // best 문서에서 “가장 점수 높은 블록” 중심으로 window 확장
-    // best 문서에서 window 확장 (기본: 상위 hit 주변)
-// ✅ 며칠/일수 질문이면: 문서 내에서 "\d+일" 블록을 다시 찾아 그 주변을 보여준다.
-const isDayQuestion = /며칠|일수|몇일/.test(q);
+    // ✅ window 확장
+    const isDayQuestion = /며칠|일수|몇일/.test(q);
 
-let minI = 0;
-let maxI = 0;
+    let minI = 0;
+    let maxI = 0;
 
-// 1) 기본 window 후보 (상위 hit 기반)
-const bestInDoc = hits
-  .filter((r) => r.document_id === bestDocId)
-  .map((r) => ({ r, s: scoreRow(r) }))
-  .sort((a, b) => b.s - a.s)
-  .slice(0, 6);
+    const bestInDoc = hits
+      .filter((r) => r.document_id === bestDocId)
+      .map((r) => ({ r, s: scoreRow(r) }))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 6);
 
-const baseIndices = bestInDoc.map((x) => x.r.block_index);
-const baseMin = Math.max(0, Math.min(...baseIndices) - 2);
-const baseMax = Math.max(...baseIndices) + 3;
+    const baseIndices = bestInDoc.map((x) => x.r.block_index);
+    const baseMin = Math.max(0, Math.min(...baseIndices) - 2);
+    const baseMax = Math.max(...baseIndices) + 3;
 
-// 2) "며칠/일수"면 숫자+일 블록을 문서에서 추가 탐색
-if (isDayQuestion) {
-  // 문서 내에서 '일'이 들어간 블록을 넓게 가져온 뒤 서버에서 정규식으로 걸러냄
-  const { data: dayCand, error: dayErr } = await sb
-    .from("document_blocks")
-    .select("id, document_id, block_index, kind, text, table_html")
-    .eq("document_id", bestDocId)
-    .or("text.ilike.%일%,table_html.ilike.%일%")
-    .order("block_index", { ascending: true })
-    .limit(300);
+    if (isDayQuestion) {
+      const { data: dayCand, error: dayErr } = await sb
+        .from("document_blocks")
+        .select("id, document_id, block_index, kind, text, table_html")
+        .eq("document_id", bestDocId)
+        .or("text.ilike.%일%,table_html.ilike.%일%")
+        .order("block_index", { ascending: true })
+        .limit(300);
 
-  if (dayErr) return NextResponse.json({ error: dayErr.message }, { status: 500 });
+      if (dayErr) return NextResponse.json({ error: dayErr.message }, { status: 500 });
 
-  const regex = /\d+\s*일/;
-
-  const matched = (dayCand ?? []).filter((r: any) => {
-    const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
-    return regex.test(hay);
-  });
-
-  // 숫자+일 블록이 있으면 그 주변을 우선
-  if (matched.length > 0) {
-    // "경조" 관련 단어가 같이 있으면 더 우선
-    const weighted = matched
-      .map((r: any) => {
+      const regex = /\d+\s*일/;
+      const matched = (dayCand ?? []).filter((r: any) => {
         const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
-        const bonus = /경조|조위|결혼|사망|부고|배우자|부모|자녀/.test(hay) ? 50 : 0;
-        return { r, score: bonus + (r.kind === "table" ? 10 : 0) };
-      })
-      .sort((a: any, b: any) => b.score - a.score);
+        return regex.test(hay);
+      });
 
-    const pivot = weighted[0].r.block_index;
-    minI = Math.max(0, pivot - 3);
-    maxI = pivot + 6; // 표는 아래로 조금 더
-  } else {
-    // 숫자+일 못 찾으면 기본 window
-    minI = baseMin;
-    maxI = baseMax;
-  }
-} else {
-  // 기본 질문은 기존 window
-  minI = baseMin;
-  maxI = baseMax;
-}
+      if (matched.length > 0) {
+        const weighted = matched
+          .map((r: any) => {
+            const hay = `${r.text ?? ""}\n${r.table_html ?? ""}`;
+            const bonus = /경조|조위|결혼|사망|부고|배우자|부모|자녀/.test(hay) ? 50 : 0;
+            return { r, score: bonus + (r.kind === "table" ? 10 : 0) };
+          })
+          .sort((a: any, b: any) => b.score - a.score);
+
+        const pivot = weighted[0].r.block_index;
+        minI = Math.max(0, pivot - 3);
+        maxI = pivot + 6;
+      } else {
+        minI = baseMin;
+        maxI = baseMax;
+      }
+    } else {
+      minI = baseMin;
+      maxI = baseMax;
+    }
 
     const { data: ctx, error: e2 } = await sb
       .from("document_blocks")
@@ -292,7 +302,7 @@ if (isDayQuestion) {
 
     if (e2) return NextResponse.json({ error: e2.message }, { status: 500 });
 
-    // evidence 변환 (프론트 AnswerRenderer가 읽는 형태)
+    // evidence 변환
     const evidence: Evidence[] = (ctx ?? []).map((b: any) => ({
       filename: doc.filename,
       block_type: b.kind === "table" ? "table_html" : "p",
@@ -300,22 +310,16 @@ if (isDayQuestion) {
       content_html: b.kind === "table" ? (b.table_html ?? null) : null,
     }));
 
-    // intent는 최소 분류(룰 기반)
-    const intent =
-      /경조|조위|결혼|부고|사망/.test(q) ? "경조/경조휴가" :
-      /연차|반차|휴가/.test(q) ? "휴가" :
-      /수당|정산|지급/.test(q) ? "수당/정산" :
-      "규정 검색 결과";
+    const answerText = buildSummary(intent, evidence, q);
 
-    return NextResponse.json({
-      ok: true,
-      answer: {
+    // ✅ 최종 응답도 표준 형태로 고정
+    return NextResponse.json(
+      okAnswer({
         intent,
-        summary: "", // 렌더러에서 evidence 기반으로 사람답게 요약 중
-        evidence,
-        related_questions: [],
-      },
-    });
+        answer: answerText,
+        hits: evidence,
+      })
+    );
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? "answer error" }, { status: 500 });
   }

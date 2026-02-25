@@ -15,26 +15,20 @@ type Evidence = {
   content_html?: string | null;
 };
 
-type AnswerPayload = {
-  intent: string;
-  summary: string;
-  evidence: Evidence[];
-  related_questions: string[];
-  answer?: string;
-  hits?: number;
+type AssistantContent = {
+  answer: string;
+  hits: Evidence[];
+  meta?: { intent?: string };
 };
 
-type AssistantMsg = {
-  role: "assistant";
-  ts: number;
-  content: string | AnswerPayload; // 문자열(에러/폴백) 또는 구조화된 답변
-};
-
+type AssistantMsg = { role: "assistant"; ts: number; content: AssistantContent };
 type Msg = UserMsg | AssistantMsg;
 
 type AnswerResponse = {
   ok?: boolean;
-  answer?: AnswerPayload;
+  answer?: string;
+  hits?: Evidence[];
+  meta?: { intent?: string };
   error?: string;
 };
 
@@ -85,22 +79,26 @@ export default function ChatPage() {
           {
             role: "assistant",
             ts: Date.now(),
-            content: json.error ?? "오류가 발생했어요.",
+            content: {
+              answer: json.error ?? "오류가 발생했어요.",
+              hits: [],
+              meta: { intent: "오류" },
+            },
           },
         ]);
         return;
       }
-
-      const payload =
-        json.answer ??
-        "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
       setMessages([
         ...next,
         {
           role: "assistant",
           ts: Date.now(),
-          content: payload,
+          content: {
+            answer: json.answer ?? "",
+            hits: json.hits ?? [],
+            meta: json.meta ?? {},
+          },
         },
       ]);
     } catch {
@@ -109,7 +107,11 @@ export default function ChatPage() {
         {
           role: "assistant",
           ts: Date.now(),
-          content: "네트워크 오류가 발생했어요.",
+          content: {
+            answer: "네트워크 오류가 발생했어요.",
+            hits: [],
+            meta: { intent: "오류" },
+          },
         },
       ]);
     } finally {
@@ -122,7 +124,7 @@ export default function ChatPage() {
     window.location.href = "/";
   }
 
-  // 관련 질문 버튼 클릭(AnswerRenderer에서 발생시키는 suggest 이벤트 처리)
+  // suggest 이벤트(유지)
   useEffect(() => {
     function onSuggest(ev: Event) {
       const q = (ev as CustomEvent).detail as string;
@@ -241,13 +243,7 @@ export default function ChatPage() {
                           ].join(" ")}
                         >
                           {m.role === "assistant" ? (
-                            typeof m.content === "string" ? (
-                              <div className="prose prose-invert max-w-none">
-                                <MarkdownView text={m.content} />
-                              </div>
-                            ) : (
-                              <AnswerRenderer data={m.content} />
-                            )
+                            <AnswerRenderer data={m.content} />
                           ) : (
                             <div className="prose prose-invert max-w-none">
                               <MarkdownView text={m.content} />
