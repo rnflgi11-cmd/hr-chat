@@ -5,7 +5,7 @@ import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence } from "./types";
-import { tryExtractAnswer } from "./extract";
+import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
@@ -66,16 +66,19 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
 
   const evidenceAll = toEvidence(doc.filename, ctx);
 
-  // ✅ 정답 추출 우선 (핵심)
-  const extracted = tryExtractAnswer(q, intent, evidenceAll);
-  const answer = extracted ?? buildSummary(intent, evidenceAll, q);
+// ✅ 정답 추출 우선 (핵심)
+const extracted = tryExtractAnswer(q, evidenceAll as any);
 
-  const evidenceUi = dedupeAndPrioritizeEvidence(evidenceAll, 12);
+const answer = extracted?.ok
+  ? extracted.answer_md
+  : buildSummary(intent, evidenceAll, q);
 
-  return {
-    ok: true,
-    answer,
-    hits: evidenceUi,
-    meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
-  };
+const evidenceUi = dedupeAndPrioritizeEvidence(evidenceAll, 12);
+
+return {
+  ok: true,
+  answer,
+  hits: evidenceUi,
+  meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
+};
 }
