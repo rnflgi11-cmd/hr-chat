@@ -1,41 +1,75 @@
-import { Evidence } from "./types";
+// src/lib/search/summarize.ts
+import type { Evidence } from "./types";
 
-const FALLBACK =
-  "죄송합니다. 업로드된 규정 문서에서 관련 내용을 찾지 못했습니다. 키워드를 바꿔서 다시 질문해 주세요.";
+function clean(s: string) {
+  return (s ?? "").replace(/\s+/g, " ").trim();
+}
 
-export function buildSummary(intent: string, evidence: Evidence[]) {
-  if (!evidence.length) return FALLBACK;
+function isStepLine(t: string) {
+  return /^(?:[①-⑳]|\d+\)|\d+\.|-|•|▶)\s*/.test(t);
+}
 
-  const head = `[${intent}]`;
+function stripStepPrefix(t: string) {
+  return t.replace(/^(?:[①-⑳]|\d+\)|\d+\.|-|•|▶)\s*/, "").trim();
+}
 
-  // 1️⃣ 번호가 붙은 절차 블록 우선
-  const steps = evidence.filter(
-    (e) =>
-      e.block_type === "p" &&
-      /^\d+[\.\)]/.test((e.content_text ?? "").trim())
-  );
+function pickTitle(texts: string[]) {
+  const cand = texts
+    .map(clean)
+    .filter(Boolean)
+    .filter((t) => t.length <= 60)
+    .filter((t) => !isStepLine(t))
+    .filter((t) => !/^담당자\s*[:：]/.test(t));
+  return cand[0] || (texts[0] ? clean(texts[0]) : "안내");
+}
 
-  if (steps.length) {
-    const joined = steps
-      .slice(0, 5)
-      .map((s) => s.content_text)
-      .join("\n");
+// ✅ index.ts가 쓰는 시그니처 그대로 유지: buildSummary(intent, evidence) -> string
+export function buildSummary(intent: string, hits: Evidence[]): string {
+  const texts = (hits ?? [])
+    .filter((h) => h.block_type === "p")
+    .map((h) => clean(h.content_text ?? ""))
+    .filter(Boolean);
 
-    return `${head}\n${joined}`;
+  const title = pickTitle(texts);
+
+  const stepLines = texts
+    .filter(isStepLine)
+    .filter((t) => /전자|결재|신청|발주|제출|승인|도착|작성/.test(t));
+
+  const noticeLines = texts.filter((t) => /사규|예외|문의|안내|참고|지연/.test(t));
+  const contactLines = texts.filter((t) => /담당자|☎|02-|@/.test(t));
+
+  let body = "";
+
+  if (stepLines.length) {
+    body += "신청 절차\n";
+    stepLines.slice(0, 8).forEach((t, i) => {
+      body += `${i + 1}) ${stripStepPrefix(t)}\n`;
+    });
+    body += "\n";
   }
 
-  // 2️⃣ 일반 문단
-  const p = evidence.find(
-    (e) => e.block_type === "p" && (e.content_text ?? "").trim()
-  );
+  if (noticeLines.length) {
+    body += "안내\n";
+    Array.from(new Set(noticeLines))
+      .slice(0, 5)
+      .forEach((t) => (body += `- ${stripStepPrefix(t)}\n`));
+    body += "\n";
+  }
 
-  const hasTable = evidence.some(
-    (e) => e.block_type === "table_html" && (e.content_html ?? "").trim()
-  );
+  if (contactLines.length) {
+    body += "담당자\n";
+    Array.from(new Set(contactLines))
+      .slice(0, 3)
+      .forEach((t) => (body += `- ${stripStepPrefix(t)}\n`));
+    body += "\n";
+  }
 
-  if (p && hasTable) return `${head}\n${p.content_text}\n\n아래 표를 참고하세요.`;
-  if (p) return `${head}\n${p.content_text}`;
-  if (hasTable) return `${head}\n아래 표를 참고하세요.`;
+  if (!body.trim()) {
+    const first = texts.slice(0, 6).join("\n");
+    body = first ? first + "\n" : "관련 규정 근거를 찾았지만 요약을 구성하지 못했습니다.\n";
+  }
 
-  return `${head}\n관련 근거를 찾았습니다. 근거 원문을 확인하세요.`;
+  const head = `[${(intent ?? "규정").trim() || "규정"}]\n${title}`.trim();
+  return `${head}\n\n${body.trim()}`.trim();
 }
