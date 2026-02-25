@@ -4,6 +4,8 @@ import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence } from "./types";
+// ✅ query 확장 적용
+import { expandQueryTerms } from "./query"; // 상단 import에 추가되어야 함
 
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
@@ -33,9 +35,12 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
 
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const intent = inferIntent(q);
-  const terms = tokenize(q);
-  const used = terms.length ? terms : [q];
-  const anchors = pickAnchors(used);
+const terms = tokenize(q);
+
+const used0 = terms.length ? terms : [q];
+const used = expandQueryTerms(q, used0);
+
+const anchors = pickAnchors(used);
 
   const { sb, hits: rawHits } = await retrieveCandidates(q, used);
 

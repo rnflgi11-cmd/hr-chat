@@ -36,3 +36,60 @@ export function inferIntent(q: string) {
   if (/수당|정산|지급/.test(q)) return "수당/정산";
   return "규정 검색 결과";
 }
+
+export function expandQueryTerms(q: string, terms: string[]): string[] {
+  const out = new Set<string>();
+  const raw = (q ?? "").trim();
+  const noSpace = raw.replace(/\s+/g, "");
+
+  // 기본: 원문/공백제거 버전도 후보에
+  if (raw) out.add(raw);
+  if (noSpace) out.add(noSpace);
+
+  // ✅ 붙여쓴 "기타휴가" → "기타 휴가"
+  if (noSpace.includes("기타휴가")) {
+    out.add("기타 휴가");
+    out.add("기타");
+    out.add("휴가");
+    // 기타휴가 문서에서 자주 나오는 대표 키워드(검색 보강)
+    out.add("병역의무");
+    out.add("민방위");
+    out.add("예비군");
+    out.add("직무교육");
+    out.add("교육 참석");
+    out.add("병가");
+  }
+
+  // ✅ 경조휴가/안식년/프로젝트수당 등 붙여쓰기 보강
+  if (noSpace.includes("경조휴가")) {
+    out.add("경조 휴가");
+    out.add("경조");
+    out.add("휴가");
+  }
+  if (noSpace.includes("안식년")) {
+    out.add("안식년 휴가");
+    out.add("장기근속");
+    out.add("포상");
+  }
+  if (noSpace.includes("프로젝트수당")) {
+    out.add("프로젝트 수당");
+    out.add("수당");
+    out.add("정산");
+  }
+
+  // ✅ terms 중 "OO휴가" 형태도 띄어쓰기 버전 추가 (예: 경조휴가, 기타휴가)
+  for (const t of terms ?? []) {
+    const tt = (t ?? "").trim();
+    if (!tt) continue;
+
+    out.add(tt);
+
+    const ns = tt.replace(/\s+/g, "");
+    if (ns.endsWith("휴가") && ns.length > 2 && !tt.includes(" ")) {
+      out.add(ns.slice(0, ns.length - 2) + " 휴가");
+      out.add("휴가");
+    }
+  }
+
+  return Array.from(out);
+}
