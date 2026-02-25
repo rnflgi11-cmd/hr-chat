@@ -4,21 +4,16 @@ import "server-only";
 export type EvidenceBlock = {
   filename?: string;
   block_type?: string; // "table_html" | "p" 등
-  content_text?: string; // ✅ toEvidence가 주는 필드
-  content_html?: string; // ✅ table_html 원문
-  // 호환용(혹시 다른 곳에서 쓰면)
-  content?: string;
+  content_text?: string;
+  content_html?: string;
+  content?: string; // 호환
 };
 
 export type ExtractResult = {
   ok: boolean;
   type: "days" | "list" | "criteria" | "unknown";
   answer_md: string;
-  used?: {
-    filename?: string;
-    row_text?: string;
-    row?: Record<string, string>;
-  };
+  used?: { filename?: string; row_text?: string; row?: Record<string, string> };
 };
 
 const FALLBACK =
@@ -27,10 +22,8 @@ const FALLBACK =
 /** ===== 질문 타입 3종 ===== */
 function classifyQuestion(q: string): ExtractResult["type"] {
   const s = normalizeText(q);
-
-  if (/(종류|목록|리스트|항목|구분|전체|뭐가|뭐야|어떤)/.test(s) && /휴가/.test(s))
-    return "list";
-  if (/(기준|조건|대상|첨부|서류|신청|비고|정의|지급)/.test(s)) return "criteria";
+  if (/(종류|목록|리스트|항목|구분|전체|뭐가|뭐야|어떤)/.test(s) && /휴가/.test(s)) return "list";
+  if (/(기준|조건|대상|첨부|서류|신청|비고|정의|절차|방법)/.test(s)) return "criteria";
   if (/(며칠|몇\s*일|일수|기간)/.test(s)) return "days";
   return "unknown";
 }
@@ -43,7 +36,6 @@ function normalizeText(s: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-
 function compact(s: string): string {
   return normalizeText(s)
     .toLowerCase()
@@ -69,7 +61,6 @@ function tokenizeKo(q: string): string[] {
   return Array.from(new Set(out));
 }
 
-/** 질문에서 사건 키워드 정규화 */
 function normalizeEventKeywords(q: string): string[] {
   const s = normalizeText(q);
   const keys: string[] = [];
@@ -112,19 +103,18 @@ function decodeHtmlEntities(s: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-
 function stripTags(html: string): string {
   const br = (html ?? "").replace(/<br\s*\/?>/gi, " ");
   const no = br.replace(/<[^>]+>/g, " ");
   return decodeHtmlEntities(no);
 }
-
 function getAttrInt(attrs: string, name: string, def = 1): number {
   const m = attrs.match(new RegExp(`${name}\\s*=\\s*["']?(\\d+)["']?`, "i"));
   const v = m ? parseInt(m[1], 10) : def;
   return Number.isFinite(v) && v > 0 ? v : def;
 }
 
+/** <table> -> grid[][] (rowspan/colspan 대응) */
 function tableHtmlToGrid(tableHtml: string): string[][] {
   const html = (tableHtml ?? "").toString();
   const tableMatch = html.match(/<table[\s\S]*?<\/table>/i);
@@ -142,9 +132,7 @@ function tableHtmlToGrid(tableHtml: string): string[][] {
     ensurePendingRow(r);
     const trHtml = trMatches[r];
 
-    const cellMatches =
-      trHtml.match(/<(td|th)([\s\S]*?)>([\s\S]*?)<\/\1>/gi) ?? [];
-
+    const cellMatches = trHtml.match(/<(td|th)([\s\S]*?)>([\s\S]*?)<\/\1>/gi) ?? [];
     const outRow: string[] = [];
     let c = 0;
 
@@ -201,20 +189,19 @@ function tableHtmlToGrid(tableHtml: string): string[][] {
   return grid;
 }
 
-/** ===== 표 헤더/컬럼 매핑 ===== */
+/** ===== 표 헤더/컬럼 ===== */
 function findHeaderRow(grid: string[][]): { header: string[]; headerRowIndex: number } | null {
-  const hints = ["구분","유형","내용","휴가일수","일수","기간","첨부서류","서류","비고","기준","대상","지급"];
+  const hints = ["구분","유형","내용","휴가일수","일수","기간","첨부서류","서류","비고","기준","대상","유효기간"];
   let bestIdx = -1;
   let bestScore = 0;
 
-  for (let i = 0; i < Math.min(grid.length, 7); i++) {
+  for (let i = 0; i < Math.min(grid.length, 8); i++) {
     const row = grid[i];
     const joined = row.map(compact).join(" ");
     let score = 0;
     for (const h of hints) if (joined.includes(compact(h))) score += 2;
     const shortCells = row.filter((x) => normalizeText(x).length > 0 && normalizeText(x).length <= 6).length;
     score += Math.min(3, shortCells);
-
     if (score > bestScore) { bestScore = score; bestIdx = i; }
   }
 
@@ -236,10 +223,10 @@ function buildColMap(header: string[]): Record<string, number> {
   setIf("type", [/^유형$/, /유형/]);
   setIf("content", [/^내용$/, /내용/]);
   setIf("days", [/휴가\s*일수/, /^일수$/, /기간/, /휴가\s*기간/]);
+  setIf("valid", [/유효\s*기간/, /유효기간/]);
   setIf("docs", [/첨부\s*서류/, /제출\s*서류/, /서류/]);
   setIf("note", [/비고/, /참고/]);
   setIf("etc", [/기준/, /대상/, /조건/]);
-  setIf("pay", [/지급/, /비용/, /금액/]);
 
   return map;
 }
@@ -273,8 +260,8 @@ function extractDaysValue(s: string): string | null {
 function scoreRow(qTokens: string[], normKeys: string[], rowText: string): number {
   const rt = normalizeText(rowText);
   const rc = compact(rt);
-
   let score = 0;
+
   for (const k of normKeys) {
     const kc = compact(k);
     if (kc && rc.includes(kc)) score += 15;
@@ -285,13 +272,13 @@ function scoreRow(qTokens: string[], normKeys: string[], rowText: string): numbe
   }
   if (normKeys.includes("사망") && /(사망|조위|조문|부고|별세)/.test(rt)) score += 6;
   if (normKeys.includes("배우자출산") && /(배우자|아내|남편|출산)/.test(rt)) score += 6;
+
   return score;
 }
 
 function pickBestRow(header: string[], bodyRows: string[][], q: string) {
   const qTokens = tokenizeKo(q);
   const normKeys = normalizeEventKeywords(q);
-
   let best: { row: string[]; obj: Record<string, string>; text: string; score: number } | null = null;
 
   for (const r of bodyRows) {
@@ -300,11 +287,107 @@ function pickBestRow(header: string[], bodyRows: string[][], q: string) {
     const sc = scoreRow(qTokens, normKeys, text);
     if (!best || sc > best.score) best = { row: r, obj, text, score: sc };
   }
-
   if (!best || best.score < 6) return null;
   return best;
 }
 
+/** ===== 마크다운 표 생성 ===== */
+function escapePipe(s: string): string {
+  return normalizeText(s).replace(/\|/g, "\\|");
+}
+function gridToMarkdownTable(header: string[], rows: string[][]): string {
+  const cols = Math.max(1, header.length);
+  const h = header.slice(0, cols).map(escapePipe);
+  const sep = new Array(cols).fill("---");
+  const body = rows.map((r) =>
+    new Array(cols).fill("").map((_, i) => escapePipe(r[i] ?? "")).join(" | ")
+  );
+
+  return `| ${h.join(" | ")} |\n| ${sep.join(" | ")} |\n${body.map((x) => `| ${x} |`).join("\n")}`;
+}
+
+/** ===== 섹션형(안식년 같은 문서) 추출 ===== */
+function buildSectionedCriteriaAnswer(blocks: EvidenceBlock[]): string | null {
+  const ps = (blocks ?? [])
+    .filter((b) => b.block_type === "p")
+    .map((b) => normalizeText(b.content_text ?? b.content ?? ""))
+    .filter(Boolean);
+
+  const table = (blocks ?? []).find((b) => b.block_type === "table_html" && /<table[\s>]/i.test(b.content_html ?? ""));
+  if (!ps.length && !table) return null;
+
+  const hasSections =
+    ps.some((x) => /시행일/.test(x)) &&
+    ps.some((x) => /대상/.test(x)) &&
+    ps.some((x) => /기준/.test(x)) &&
+    ps.some((x) => /사용\s*절차|사용절차/.test(x));
+
+  if (!hasSections) return null;
+
+  // 제목
+  const title =
+    ps.find((x) => /^\[.*\]$/.test(x)) ||
+    ps.find((x) => /휴가\s*기준/.test(x)) ||
+    "기준";
+
+  // 섹션별 라인 수집
+  const pickSection = (name: string) => {
+    const idx = ps.findIndex((x) => new RegExp(name).test(x));
+    if (idx < 0) return [];
+    const out: string[] = [];
+    for (let i = idx + 1; i < ps.length; i++) {
+      const line = ps[i];
+      if (/시행일|대상|기준|사용\s*절차|사용절차/.test(line)) break;
+      if (!line) continue;
+      out.push(line);
+    }
+    return out;
+  };
+
+  const 시행일 = pickSection("시행일");
+  const 대상 = pickSection("대상");
+  const 사용절차 = pickSection("사용\\s*절차|사용절차").filter((x) => /①|②|③|④|⑤|\d+\)|\d+\./.test(x));
+
+  // 기준 표
+  let 기준표 = "";
+  if (table?.content_html) {
+    const grid = tableHtmlToGrid(table.content_html);
+    const headerInfo = findHeaderRow(grid);
+    if (headerInfo) {
+      const header = headerInfo.header;
+      const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+      기준표 = gridToMarkdownTable(header, body);
+    }
+  }
+
+  const lines: string[] = [];
+  lines.push(`## ${title}`);
+
+  if (시행일.length) {
+    lines.push(`\n### 시행일`);
+    lines.push(...시행일.map((x) => `- ${x.replace(/^•\s*/g, "")}`));
+  }
+
+  if (대상.length) {
+    lines.push(`\n### 대상`);
+    lines.push(...대상.map((x) => `- ${x.replace(/^•\s*/g, "")}`));
+  }
+
+  if (기준표) {
+    lines.push(`\n### 기준`);
+    lines.push(기준표);
+  }
+
+  if (사용절차.length) {
+    lines.push(`\n### 사용 절차`);
+    // 번호 유지
+    lines.push(...사용절차.map((x) => `- ${x}`));
+  }
+
+  return lines.join("\n");
+}
+
+/** ===== list/days/criteria 기본 출력 ===== */
 function buildListAnswer(colMap: Record<string, number>, bodyRows: string[][]): string {
   const out: string[] = [];
   for (const r of bodyRows) {
@@ -319,62 +402,46 @@ function buildListAnswer(colMap: Record<string, number>, bodyRows: string[][]): 
   return out.length ? out.join("\n") : FALLBACK;
 }
 
-function buildCriteriaAnswer(colMap: Record<string, number>, row: string[], rowObj: Record<string, string>): string {
-  const type = normalizeText(row[colMap.type ?? -1] ?? "") || rowObj["유형"] || "";
-  const content = normalizeText(row[colMap.content ?? -1] ?? "") || rowObj["내용"] || "";
-  const daysRaw =
-    normalizeText(row[colMap.days ?? -1] ?? "") ||
-    rowObj["휴가일수"] ||
-    rowObj["휴가기간"] ||
-    rowObj["일수"] ||
-    "";
-  const days = extractDaysValue(daysRaw) ?? (daysRaw ? daysRaw : "");
-
-  const docs = normalizeText(row[colMap.docs ?? -1] ?? "") || rowObj["첨부서류"] || rowObj["제출서류"] || "";
-  const note = normalizeText(row[colMap.note ?? -1] ?? "") || rowObj["비고"] || "";
-  const etc =
-    normalizeText(row[colMap.etc ?? -1] ?? "") ||
-    rowObj["기준"] || rowObj["대상"] || rowObj["조건"] || "";
-
-  const lines: string[] = [];
-  if (type) lines.push(`- 유형: ${type}`);
-  if (content) lines.push(`- 내용: ${content}`);
-  if (days) lines.push(`- 기간/일수: ${days}`);
-  if (etc) lines.push(`- 기준/대상: ${etc}`);
-  if (docs) lines.push(`- 첨부서류: ${docs}`);
-  if (note) lines.push(`- 비고: ${note}`);
-
-  return lines.length ? lines.join("\n") : FALLBACK;
-}
-
 function buildDaysAnswer(colMap: Record<string, number>, row: string[]): string {
   const type = normalizeText(row[colMap.type ?? -1] ?? "");
   const content = normalizeText(row[colMap.content ?? -1] ?? "");
   const daysRaw = normalizeText(row[colMap.days ?? -1] ?? "");
   const days = extractDaysValue(daysRaw) ?? (daysRaw ? daysRaw : null);
-
-  const docs = normalizeText(row[colMap.docs ?? -1] ?? "");
-  const note = normalizeText(row[colMap.note ?? -1] ?? "");
+  const valid = normalizeText(row[colMap.valid ?? -1] ?? "");
 
   if (!days) return FALLBACK;
 
   const ctx = [type, content].filter(Boolean).join(" · ");
-  const tail: string[] = [];
-  if (docs) tail.push(`- 첨부서류: ${docs}`);
-  if (note) tail.push(`- 비고: ${note}`);
+  return `**${days}**${ctx ? ` (${ctx})` : ""}${valid ? `\n- 유효기간: ${valid}` : ""}`.trim();
+}
 
-  return `**${days}**${ctx ? ` (${ctx})` : ""}\n${tail.length ? `\n${tail.join("\n")}` : ""}`.trim();
+function buildCriteriaRowAnswer(colMap: Record<string, number>, row: string[], rowObj: Record<string, string>): string {
+  const type = normalizeText(row[colMap.type ?? -1] ?? "") || rowObj["유형"] || "";
+  const content = normalizeText(row[colMap.content ?? -1] ?? "") || rowObj["내용"] || "";
+  const daysRaw = normalizeText(row[colMap.days ?? -1] ?? "") || rowObj["휴가일수"] || rowObj["일수"] || "";
+  const days = extractDaysValue(daysRaw) ?? (daysRaw ? daysRaw : "");
+  const valid = normalizeText(row[colMap.valid ?? -1] ?? "") || rowObj["유효기간"] || "";
+
+  const lines: string[] = [];
+  if (type) lines.push(`- 유형: ${type}`);
+  if (content) lines.push(`- 내용: ${content}`);
+  if (days) lines.push(`- 기간/일수: ${days}`);
+  if (valid) lines.push(`- 유효기간: ${valid}`);
+  return lines.length ? lines.join("\n") : FALLBACK;
 }
 
 /** ===== exported main ===== */
 export function extractAnswerFromBlocks(question: string, blocks: EvidenceBlock[]): ExtractResult {
   const qType = classifyQuestion(question);
 
-  // ✅ toEvidence의 table은 block_type === "table_html"
+  // ✅ 기준형 문서(안식년처럼 섹션+표+절차) 먼저 시도
+  if (qType === "criteria") {
+    const sectioned = buildSectionedCriteriaAnswer(blocks);
+    if (sectioned) return { ok: true, type: "criteria", answer_md: sectioned };
+  }
+
   const tableBlocks = (blocks ?? []).filter(
-    (b) =>
-      b.block_type === "table_html" &&
-      /<table[\s>]/i.test(b.content_html ?? "")
+    (b) => b.block_type === "table_html" && /<table[\s>]/i.test(b.content_html ?? "")
   );
 
   for (const b of tableBlocks) {
@@ -393,45 +460,27 @@ export function extractAnswerFromBlocks(question: string, blocks: EvidenceBlock[
     const header = headerInfo.header;
     const colMap = buildColMap(header);
 
-    const body = grid.slice(headerInfo.headerRowIndex + 1);
-    const headerSig = compact(header.join("|"));
-    const bodyRows = body.filter((r) => compact(r.join("|")) !== headerSig);
-    if (!bodyRows.length) continue;
+    const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+    if (!body.length) continue;
 
     if (qType === "list") {
-      const md = buildListAnswer(colMap, bodyRows);
+      const md = buildListAnswer(colMap, body);
       if (md !== FALLBACK) return { ok: true, type: "list", answer_md: md, used: { filename: b.filename } };
       continue;
     }
 
-    const best = pickBestRow(header, bodyRows, question);
+    const best = pickBestRow(header, body, question);
     if (!best) continue;
 
     if (qType === "days") {
       const md = buildDaysAnswer(colMap, best.row);
-      if (md !== FALLBACK) {
-        return { ok: true, type: "days", answer_md: md, used: { filename: b.filename, row_text: best.text, row: best.obj } };
-      }
+      if (md !== FALLBACK) return { ok: true, type: "days", answer_md: md, used: { filename: b.filename } };
       continue;
     }
 
-    const md = buildCriteriaAnswer(colMap, best.row, best.obj);
-    if (md !== FALLBACK) {
-      return { ok: true, type: "criteria", answer_md: md, used: { filename: b.filename, row_text: best.text, row: best.obj } };
-    }
-  }
-
-  // text fallback (toEvidence는 content_text 사용)
-  const text = (blocks ?? [])
-    .map((b) => normalizeText(b.content_text ?? b.content ?? ""))
-    .filter(Boolean)
-    .join("\n");
-
-  if (text && qType === "days") {
-    const m = text.match(/(\d+(?:\.\d+)?)\s*일/);
-    if (m) {
-      return { ok: true, type: "days", answer_md: `**${m[0]}**` };
-    }
+    // criteria (row 기반)
+    const md = buildCriteriaRowAnswer(colMap, best.row, best.obj);
+    if (md !== FALLBACK) return { ok: true, type: "criteria", answer_md: md, used: { filename: b.filename } };
   }
 
   return { ok: false, type: qType, answer_md: FALLBACK };
