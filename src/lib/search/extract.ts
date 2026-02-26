@@ -381,10 +381,11 @@ function gridToMarkdownTable(header: string[], rows: string[][]): string {
   return `| ${h.join(" | ")} |\n| ${sep.join(" | ")} |\n${body.map((x) => `| ${x} |`).join("\n")}`;
 }
 
-function buildFullSourceAnswer(question: string, blocks: Evidence[]): string | null {
+function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: QuestionKind): string | null {
   const q = normalizeText(question);
-  const wantFull = /(원문|전체|전부|모두|다\s*보여|표|경조|휴가)/.test(q);
-  if (!wantFull) return null;
+  const explicitFull = /(원문|전체|전부|모두|다\s*보여|표\s*전체|섹션)/.test(q);
+  const intentLikeQuestion = qType === "list" || qType === "criteria";
+  if (!explicitFull && !intentLikeQuestion) return null;
 
   const qTokens = tokenizeKo(question);
   const normKeys = normalizeEventKeywords(question);
@@ -408,25 +409,43 @@ function buildFullSourceAnswer(question: string, blocks: Evidence[]): string | n
     .filter((x): x is { score: number; tableMd: string } => !!x)
     .sort((a, b) => b.score - a.score);
 
-  if (!tables.length) return null;
-
-  const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}\n${t.tableMd}`);
-
-  const notes = (blocks ?? [])
+  const paragraphs = (blocks ?? [])
     .filter((b) => b.block_type === "p")
-    .map((b) => normalizeText(b.content_text ?? ""))
-    .filter((line) => line.length > 0)
-    .filter((line) => /유의사항|사전|사후|비고|첨부|서류|신청|절차|기준/.test(line))
-    .slice(0, 8)
-    .map((line) => `- ${line.replace(/^•\s*/g, "")}`);
+    .map((b, idx) => ({
+      idx,
+      line: normalizeText(b.content_text ?? ""),
+    }))
+    .filter((x) => x.line.length > 0)
+    .map((x) => ({
+      ...x,
+      score: scoreRow(qTokens, normKeys, x.line) + (/유의사항|사전|사후|비고|첨부|서류|신청|절차|기준/.test(x.line) ? 3 : 0),
+    }));
 
-  const out: string[] = ["## 관련 원문(표)", ...pickedTables];
-  if (notes.length) {
-    out.push("\n## 관련 원문(안내)", ...notes);
+  if (!tables.length && !paragraphs.length) return null;
+
+  const out: string[] = [];
+
+  if (tables.length) {
+    const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}
+${t.tableMd}`);
+    out.push("## 관련 원문(표)", ...pickedTables);
   }
 
-  return out.join("\n\n");
+  if (paragraphs.length) {
+    const bestIdx = paragraphs.reduce((best, cur, i, arr) => (cur.score > arr[best].score ? i : best), 0);
+    const start = Math.max(0, bestIdx - 3);
+    const sectionLines = paragraphs
+      .slice(start, start + 14)
+      .map((x) => `- ${x.line.replace(/^•\s*/g, "")}`);
+
+    if (sectionLines.length) {
+      out.push("## 관련 원문(섹션)", ...sectionLines);
+    }
+  }
+
+  return out.length ? out.join("\n\n") : null;
 }
+
 
 /** ===== list/days/criteria 출력 ===== */
 function buildListAnswer(colMap: Record<string, number>, bodyRows: string[][]): string {
@@ -489,9 +508,9 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     (b: any) => b.block_type === "table_html" && /<table[\s>]/i.test((b as any).content_html ?? "")
   );
 
-  const fullSource = buildFullSourceAnswer(question, blocks);
+  const fullSource = buildFullSourceAnswer(question, blocks, qType);
   if (fullSource) return { ok: true, type: qType, answer_md: fullSource };
-  
+
   for (const b of tableBlocks) {
     const html = (b as any).content_html ?? "";
     let grid: string[][] = [];
