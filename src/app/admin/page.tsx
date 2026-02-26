@@ -113,6 +113,34 @@ await refresh();
     }
   }
 
+    async function copySource(doc: Doc) {
+    try {
+      setBusy(true);
+      setMsg("원문 불러오는 중...");
+
+      const res = await fetch(`/api/admin/docs/${doc.id}`);
+      const json = await res.json();
+
+      if (!res.ok) {
+        setMsg(json.error ?? "원문 불러오기 실패");
+        return;
+      }
+
+      const text = (json.markdown ?? "").toString();
+      if (!text.trim()) {
+        setMsg("복사할 원문이 없습니다.");
+        return;
+      }
+
+      await navigator.clipboard.writeText(text);
+      setMsg(`원문 복사 완료: ${doc.filename} (${json.block_count ?? 0} 블록)`);
+    } catch {
+      setMsg("복사에 실패했습니다. 브라우저 권한을 확인해 주세요.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  
   async function removeDoc(docId: string) {
     if (!confirm("정말 삭제할까요? (스토리지/DB에서 삭제됩니다)")) return;
 
@@ -363,6 +391,14 @@ await refresh();
                             열기
                           </a>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => copySource(d)}
+                          disabled={busy}
+                          className="text-xs font-semibold text-emerald-200 hover:underline disabled:opacity-50"
+                        >
+                          원문 복사
+                        </button>
                       </div>
 
                       <div className="mt-2 text-xs text-white/50">
