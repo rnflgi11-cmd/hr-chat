@@ -75,9 +75,11 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   // ✅ 정답 추출 우선 (핵심)
   const extracted = tryExtractAnswer(q, normalizedEvidence);
 
-  const answer = extracted?.ok
+ const draftedAnswer = extracted?.ok
     ? extracted.answer_md
     : buildSummary(intent, normalizedEvidence, q);
+
+     const answer = (draftedAnswer ?? "").trim() || noResultFallback;
 
   const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
 
