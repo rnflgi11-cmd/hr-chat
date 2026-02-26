@@ -40,7 +40,6 @@ export type DocInfo = {
   open_url?: string;
 };
 
-
 function normalizeText(rawText: string) {
   const t = (rawText || "").replace(/\r/g, "").trim();
   if (!t) return "";
@@ -124,7 +123,7 @@ export async function buildWindowContext({
     .map((h) => ({
       h,
       s: typeof h?.score === "number" ? h.score : typeof h?.sim === "number" ? h.sim : scoreRow(h),
-            idx: Number.isFinite(Number(h?.chunk_index))
+       idx: Number.isFinite(Number(h?.chunk_index))
         ? Number(h.chunk_index)
         : Number.isFinite(Number(h?.block_index))
           ? Number(h.block_index)
@@ -149,54 +148,78 @@ export async function buildWindowContext({
 
   if (!chunkIdxs.length) return [];
 
-  // document_chunks에서 가져오기 (컬럼명 관용 처리)
-  const { data, error } = await sb
+  // 1) document_chunks에서 먼저 조회
+  const { data: chunkData, error: chunkError } = await sb
     .from("document_chunks")
     .select("document_id, chunk_index, block_type, content_text, content_html, content, html, text, sim, score")
     .eq("document_id", bestDocId)
     .in("chunk_index", chunkIdxs);
 
-  if (error || !data) return [];
-
   // filename/open_url는 별도 로드해서 주입
   const doc = await loadDocFilename(sb, bestDocId);
+  if (!chunkError && Array.isArray(chunkData) && chunkData.length) {
+    const blocks: ContextBlock[] = (chunkData as any[])
+      .map((r) => {
+        const block_type = (r.block_type ?? "").toString();
 
-  // 정렬
-  const blocks: ContextBlock[] = (data as any[])
-    .map((r) => {
-      const block_type = (r.block_type ?? "").toString();
+        const content_html =
+          typeof r.content_html === "string"
+            ? r.content_html
+            : typeof r.html === "string"
+              ? r.html
+              : typeof r.content === "string" && isProbablyHtml(r.content)
+                ? r.content
+                : undefined;
 
-      const content_html =
-        typeof r.content_html === "string"
-          ? r.content_html
-          : typeof r.html === "string"
-            ? r.html
-            : typeof r.content === "string" && isProbablyHtml(r.content)
-              ? r.content
-              : undefined;
+        const content_text =
+          typeof r.content_text === "string"
+            ? r.content_text
+            : typeof r.text === "string"
+              ? r.text
+              : typeof r.content === "string" && !isProbablyHtml(r.content)
+                ? r.content
+                : undefined;
 
-      const content_text =
-        typeof r.content_text === "string"
-          ? r.content_text
-          : typeof r.text === "string"
-            ? r.text
-            : typeof r.content === "string" && !isProbablyHtml(r.content)
-              ? r.content
-              : undefined;
+        return {
+          document_id: bestDocId,
+          filename: doc.filename,
+          open_url: doc.open_url,
+          chunk_index: Number(r.chunk_index ?? 0),
+          block_type,
+          content_text,
+          content_html,
+          sim: typeof r.sim === "number" ? r.sim : undefined,
+          score: typeof r.score === "number" ? r.score : undefined,
+          raw: r,
+        };
+      })
+      .sort((a, b) => a.chunk_index - b.chunk_index);
 
-      return {
-        document_id: bestDocId,
-        filename: doc.filename,
-        open_url: doc.open_url,
-        chunk_index: Number(r.chunk_index ?? 0),
-        block_type,
-        content_text,
-        content_html,
-        sim: typeof r.sim === "number" ? r.sim : undefined,
-        score: typeof r.score === "number" ? r.score : undefined,
-        raw: r,
-      };
-    })
+    return blocks;
+  }
+
+  // 2) fallback: document_blocks 기반 시스템 지원
+  const { data: blockData, error: blockError } = await sb
+    .from("document_blocks")
+    .select("document_id, block_index, kind, text, table_html")
+    .eq("document_id", bestDocId)
+    .in("block_index", chunkIdxs)
+    .order("block_index", { ascending: true });
+
+  if (blockError || !Array.isArray(blockData) || !blockData.length) return [];
+
+  const blocks: ContextBlock[] = (blockData as any[])
+    .map((r) => ({
+      document_id: bestDocId,
+      filename: doc.filename,
+      open_url: doc.open_url,
+      chunk_index: Number(r.block_index ?? 0),
+      block_type: (r.kind ?? "").toString(),
+      content_text: typeof r.text === "string" ? r.text : undefined,
+      content_html: typeof r.table_html === "string" ? r.table_html : undefined,
+      raw: r,
+    }))
+
     .sort((a, b) => a.chunk_index - b.chunk_index);
 
   return blocks;
