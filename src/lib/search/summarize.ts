@@ -1,8 +1,16 @@
 // lib/search/summarize.ts
 import type { Evidence } from "./types";
 
-function clean(s: string) {
+function normalizeForScore(s: string) {
   return (s ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeForDisplay(s: string) {
+  return (s ?? "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function tokenize(q: string) {
@@ -16,32 +24,48 @@ function tokenize(q: string) {
 }
 
 function scoreLine(line: string, terms: string[]) {
-  const s = line.toLowerCase();
+  const s = normalizeForScore(line).toLowerCase();
   let score = 0;
   for (const t of terms) if (s.includes(t)) score += Math.min(6, t.length);
   if (/\d+\s*일/.test(line)) score += 4;
   if (/\d+[\d,]*\s*원/.test(line)) score += 4;
-  if (/기준|대상|절차|유형|조건/.test(line)) score += 2;
+  if (/시행일|대상|절차|유형|조건|기준/.test(line)) score += 2;
   return score;
 }
 
+function clampParagraph(s: string, max = 700) {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max).trimEnd()}…`;
+}
+
 export function buildSummary(intent: string, evidenceAll: Evidence[], q: string) {
-  const terms = tokenize(q);
+    const terms = tokenize(q);
 
-  const candidates = evidenceAll
+  const paragraphs = evidenceAll
     .filter((e) => e.block_type === "p")
-    .map((e, idx) => ({
-      idx,
-      text: clean(e.content_text ?? ""),
-    }))
-    .filter((x) => x.text.length > 0)
-    .map((x) => ({ ...x, score: scoreLine(x.text, terms) }))
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx));
+    .map((e, idx) => {
+      const display = normalizeForDisplay(e.content_text ?? "");
+      return {
+        idx,
+        display,
+        score: scoreLine(display, terms),
+      };
+    })
+    .filter((x) => x.display.length > 0);
 
-  if (!candidates.length) return "";
+      if (!paragraphs.length) return "";
 
-    const selected = candidates.slice(0, 8).sort((a, b) => a.idx - b.idx).map((x) => x.text);
-  const title = intent ? `### ${intent} 관련 요약` : "### 규정 요약";
+        const bestIdx = paragraphs.reduce((best, cur, i, arr) =>
+    cur.score > arr[best].score ? i : best, 0
+  );
 
-  return [title, ...selected.map((x) => `- ${x.startsWith("-") ? x.slice(1).trim() : x}`)].join("\n");
+    const start = Math.max(0, bestIdx - 2);
+  const selected = paragraphs.slice(start, start + 12);
+
+  const title = intent ? `### ${intent} 관련 원문 발췌` : "### 규정 원문 발췌";
+
+  return [
+    title,
+    ...selected.map((x) => clampParagraph(x.display)),
+  ].join("\n\n");
 }
