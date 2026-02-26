@@ -11,6 +11,9 @@ type Block = {
   table_html?: string | null;
   tsv?: string | null;
   filename?: string | null;
+    block_type?: "p" | "table_html";
+  content_text?: string | null;
+  content_html?: string | null;
 };
 
 type NormalizedPayload = {
@@ -28,27 +31,43 @@ function normalizeData(data: unknown): NormalizedPayload {
   }
 
   if (typeof data === "object") {
-    const obj = data as any;
+    const obj = data as Record<string, unknown>;
 
     // 🔥 서버에서 오는 형태 처리
     // { intent, summary, evidence, related_questions }
     if ("summary" in obj) {
       return {
         answer: String(obj.summary ?? ""),
-        hits: Array.isArray(obj.evidence) ? obj.evidence : [],
+        hits: Array.isArray(obj.evidence) ? (obj.evidence as Block[]) : [],
       };
     }
 
     // 기존 형태 처리
     return {
       answer: typeof obj.answer === "string" ? obj.answer : "",
-      hits: Array.isArray(obj.hits) ? obj.hits : [],
+      hits: Array.isArray(obj.hits) ? (obj.hits as Block[]) : [],
     };
   }
 
   
   return { answer: String(data), hits: [] };
 }
+
+function normalizeHit(raw: Block): Block {
+  const blockType = raw.block_type;
+  const normalizedKind =
+    raw.kind ??
+    (blockType === "table_html" ? "table" : blockType === "p" ? "paragraph" : undefined) ??
+    (raw.table_html || raw.content_html ? "table" : "paragraph");
+
+  return {
+    ...raw,
+    kind: normalizedKind,
+    text: raw.text ?? raw.content_text ?? null,
+    table_html: raw.table_html ?? raw.content_html ?? null,
+  };
+}
+
 
 function clampText(s: string, max = 520) {
   const t = (s ?? "").trim();
@@ -65,7 +84,7 @@ export default function AnswerRenderer({ data }: { data: unknown }) {
 
   const [showSources, setShowSources] = useState(false);
   const answer = (payload.answer ?? "").trim();
-  const hits = payload.hits ?? [];
+ const hits = useMemo(() => (payload.hits ?? []).map(normalizeHit), [payload.hits]);
 
   return (
     <div style={{ display: "grid", gap: 12 }}>

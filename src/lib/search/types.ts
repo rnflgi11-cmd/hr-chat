@@ -1,5 +1,5 @@
 export type Row = {
-  content_text: string;
+  content_text?: string | null;
   id: string;
   document_id: string;
   block_index: number;
@@ -9,6 +9,7 @@ export type Row = {
 };
 
 export type Evidence = {
+  table_ok: boolean;
   filename: string;
   block_type: "p" | "table_html";
   content_text?: string | null;

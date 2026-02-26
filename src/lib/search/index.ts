@@ -4,7 +4,7 @@ import { inferIntent, pickAnchors, tokenize, expandQueryTerms } from "./query";
 import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
-import { SearchAnswer, Evidence } from "./types";
+import { SearchAnswer, Evidence, Row } from "./types";
 import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
@@ -35,6 +35,9 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
 
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const intent = inferIntent(q);
+    const noResultFallback =
+    "질문과 정확히 일치하는 규정 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요.\n" +
+    "예) '경조휴가 부모상 일수', '기타휴가 병가 기준'";
 
   const terms = tokenize(q);
   const used0 = terms.length ? terms : [q];
@@ -45,7 +48,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const { sb, hits: rawHits } = await retrieveCandidates(q, used);
 
   if (!rawHits.length) {
-    return { ok: true, answer: buildSummary(intent, [], q), hits: [], meta: { intent } };
+    return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
   }
 
   let hits = filterByAnchors(rawHits, anchors);
@@ -53,32 +56,35 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
 
   if (/휴가/.test(intent)) {
     const filtered = hits
-      .filter((h: any) => /휴가|연차|경조/.test(h.text ?? ""))
-      .filter((h: any) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(h.text ?? ""));
+      .filter((h: Row) => /휴가|연차|경조/.test(h.text ?? ""))
+      .filter((h: Row) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(h.text ?? ""));
     if (filtered.length) hits = filtered;
   }
 
   const scoreRow = makeScorer({ q, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
-
+  if (!bestDocId) {
+    return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
+  }
   const doc = await loadDocFilename(sb, bestDocId);
   const ctx = await buildWindowContext({ sb, q, bestDocId, hits, scoreRow });
 
   const evidenceAll = toEvidence(doc.filename, ctx);
+  const normalizedEvidence = evidenceAll.map(e => ({ ...e, table_ok: e.table_ok ?? false }));
 
-// ✅ 정답 추출 우선 (핵심)
-const extracted = tryExtractAnswer(q, evidenceAll as any);
+  // ✅ 정답 추출 우선 (핵심)
+  const extracted = tryExtractAnswer(q, normalizedEvidence);
 
-const answer = extracted?.ok
-  ? extracted.answer_md
-  : buildSummary(intent, evidenceAll, q);
+  const answer = extracted?.ok
+    ? extracted.answer_md
+    : buildSummary(intent, normalizedEvidence, q);
 
-const evidenceUi = dedupeAndPrioritizeEvidence(evidenceAll, 12);
+  const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
 
-return {
-  ok: true,
-  answer,
-  hits: evidenceUi,
-  meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
-};
+  return {
+    ok: true,
+    answer,
+    hits: evidenceUi,
+    meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
+  };
 }
