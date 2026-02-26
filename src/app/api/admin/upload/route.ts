@@ -33,7 +33,7 @@ function normalizeText(s: string) {
 
 /** HTML을 문단/표 블록으로 분해 (초보/안전 버전) */
 function htmlToBlocks(html: string) {
-  const $ = cheerio.load(html); // 옵션 제거
+  const $ = cheerio.load(html);
   const blocks: Array<{
     kind: "paragraph" | "table";
     text: string;
@@ -42,30 +42,44 @@ function htmlToBlocks(html: string) {
 
   const body = $("body");
 
-  // body 직계 자식만 순서대로 수집(표 내부 p 중복 방지)
-  const elements = body.children().toArray();
+  const addParagraph = (raw: string, prefix = "") => {
+    const text = normalizeText(`${prefix}${raw}`);
+    if (text) blocks.push({ kind: "paragraph", text });
+  };
 
-  for (const el of elements as any[]) {
-    const tag = (el as any).tagName?.toLowerCase?.() ?? "";
+  // body 직계 자식 순서 유지 + 목록/글머리 처리
+  body.children().each((_, node) => {
+    const $node = $(node);
+    const tag = (node.tagName ?? "").toLowerCase();
 
     if (tag === "table") {
-      const tableHtml = $.html(el);
-      const tableText = normalizeText($(el).text());
-
-      if ((tableText && tableText.length > 0) || (tableHtml && tableHtml.length > 0)) {
+      const tableHtml = $.html(node);
+      const tableText = normalizeText($node.text());
+      if (tableText || tableHtml) {
         blocks.push({
           kind: "table",
           text: tableText,
           table_html: sanitizeTableHtml(tableHtml),
         });
       }
-    } else if (["p", "h1", "h2", "h3", "h4", "li", "div", "section", "article"].includes(tag)) {
-      const text = normalizeText($(el).text());
-      if (text) blocks.push({ kind: "paragraph", text });
+      return;
     }
-  }
-
+  
   // table/p가 하나도 안 잡히면 body 전체 텍스트를 1개 문단으로
+    if (["ul", "ol"].includes(tag)) {
+      $node.children("li").each((idx, li) => {
+        const liText = $(li).text();
+        const prefix = tag === "ol" ? `${idx + 1}. ` : "• ";
+        addParagraph(liText, prefix);
+      });
+      return;
+    }
+
+    if (["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div", "section", "article"].includes(tag)) {
+      addParagraph($node.text());
+    }
+  });
+
   if (!blocks.length) {
     const text = normalizeText(body.text());
     if (text) blocks.push({ kind: "paragraph", text });
@@ -150,7 +164,7 @@ export async function POST(req: NextRequest) {
           await sb.from("document_chunks").delete().in("document_id", existingIds);
           await sb.from("documents").delete().in("id", existingIds);
         }
-        
+
         // DOCX -> HTML
         const { value: html } = await mammoth.convertToHtml(
           { buffer: buf },
@@ -170,6 +184,7 @@ export async function POST(req: NextRequest) {
         }
 
         // documents insert (스키마 호환: content_type / mime_type 모두 시도)
+        const typed = file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         const basePayload = {
           filename: file.name,
           size_bytes: buf.length,
@@ -180,9 +195,13 @@ export async function POST(req: NextRequest) {
         let e1: Error | null = null;
 
         const payloads = [
-          { ...basePayload, content_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
-          { ...basePayload, mime_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
-          basePayload,
+          { ...basePayload, content_type: typed },
+          { ...basePayload, mime_type: typed },
+          { filename: file.name, content_type: typed, size_bytes: buf.length },
+          { filename: file.name, mime_type: typed, size_bytes: buf.length },
+          { filename: file.name, content_type: typed },
+          { filename: file.name, mime_type: typed },
+          { filename: file.name },
         ];
 
         for (const payload of payloads) {

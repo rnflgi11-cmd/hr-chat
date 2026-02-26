@@ -33,6 +33,17 @@ function normalizeCell(c: string): string {
     .replace(/\|/g, "\\|");
 }
 
+
+function getTableCellSet(html: string): Set<string> {
+  const cells = html.match(/<(td|th)[\s\S]*?<\/\1>/gi) ?? [];
+  const out = new Set<string>();
+  for (const c of cells) {
+    const v = normalizeCell(c).replace(/\s*<br>\s*/g, " ").trim();
+    if (v) out.add(v);
+  }
+  return out;
+}
+
 function toMarkdownTable(html: string): string {
   const tr = html.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
   const rows = tr
@@ -47,10 +58,8 @@ function toMarkdownTable(html: string): string {
   const header = rows[0];
   const body = rows.slice(1);
   const cols = Math.max(1, header.length);
-  const sep = new Array(cols).fill("---");
   const lines = [
     `| ${new Array(cols).fill("").map((_, i) => header[i] ?? "").join(" | ")} |`,
-    `| ${sep.join(" | ")} |`,
     ...body.map((r) =>
       `| ${new Array(cols)
         .fill("")
@@ -99,16 +108,22 @@ export async function GET(req: NextRequest) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     const lines: string[] = [];
+    const tableCells = new Set<string>();
 
     for (const b of blocks ?? []) {
       if (b.kind === "table" && b.table_html) {
         const table = toMarkdownTable(b.table_html);
         if (table) lines.push(table);
+        for (const c of getTableCellSet(b.table_html)) tableCells.add(c);
         continue;
       }
 
       const text = (b.text ?? "").toString().trim();
       if (!text) continue;
+
+      const compact = text.replace(/\s+/g, " ").trim();
+      if (compact.length <= 40 && tableCells.has(compact)) continue; // 표 셀 중복 텍스트 제거
+
       lines.push(text);
     }
 
