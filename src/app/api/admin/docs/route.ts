@@ -16,6 +16,43 @@ function canPreview(filename: string) {
   );
 }
 
+function toMarkdownTable(html: string): string {
+  const tr = html.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
+  const rows = tr
+    .map((row) => {
+      const cells = row.match(/<(td|th)[\s\S]*?<\/\1>/gi) ?? [];
+      return cells
+        .map((c) =>
+          c
+            .replace(/<br\s*\/?>/gi, "\\n")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/gi, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+        )
+        .filter(Boolean);
+    })
+    .filter((r) => r.length > 0);
+
+  if (!rows.length) return "";
+
+  const header = rows[0];
+  const body = rows.slice(1);
+  const sep = new Array(header.length).fill("---");
+  const lines = [
+    `| ${header.join(" | ")} |`,
+    `| ${sep.join(" | ")} |`,
+    ...body.map((r) =>
+      `| ${new Array(header.length)
+        .fill("")
+        .map((_, i) => r[i] ?? "")
+        .join(" | ")} |`
+    ),
+  ];
+
+  return lines.join("\n");
+}
+
 // ✅ 관리자 체크: 프론트에서 headers["x-user"] = JSON.stringify(user) 로 전달
 function isAdmin(req: NextRequest) {
   const raw = req.headers.get("x-user");
@@ -28,8 +65,54 @@ function isAdmin(req: NextRequest) {
   }
 }
 
-export async function GET() {
-  const { data, error } = await supabaseAdmin
+export async function GET(req: NextRequest) {
+  const docId = req.nextUrl.searchParams.get("docId")?.trim();
+
+  // 단건 원문 조회 모드: /api/admin/docs?docId=<id>
+  if (docId) {
+    const { data: doc, error: docErr } = await supabaseAdmin
+      .from("documents")
+      .select("id, filename")
+      .eq("id", docId)
+      .single();
+
+    if (docErr || !doc) {
+      return NextResponse.json({ error: "문서를 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    const { data: blocks, error } = await supabaseAdmin
+      .from("document_blocks")
+      .select("block_index, kind, text, table_html")
+      .eq("document_id", docId)
+      .order("block_index", { ascending: true });
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    const lines: string[] = [`# ${doc.filename}`];
+
+    for (const b of blocks ?? []) {
+      if (b.kind === "table" && b.table_html) {
+        const table = toMarkdownTable(b.table_html);
+        if (table) lines.push("\n## 표", table);
+        continue;
+      }
+
+      const text = (b.text ?? "").toString().trim();
+      if (!text) continue;
+      lines.push(text);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      id: docId,
+      filename: doc.filename,
+      markdown: lines.join("\n\n"),
+      block_count: (blocks ?? []).length,
+    });
+  }
+
+  // 기존 목록 조회 모드
+    const { data, error } = await supabaseAdmin
     .from("documents")
     .select("id, filename, content_type, size_bytes, created_at, storage_path")
     .order("created_at", { ascending: false });
