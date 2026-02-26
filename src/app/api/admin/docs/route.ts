@@ -16,34 +16,43 @@ function canPreview(filename: string) {
   );
 }
 
+function normalizeCell(c: string): string {
+  const plain = c
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\r/g, "")
+    .trim();
+
+  // markdown table cell 안전화
+  return plain
+    .split(/\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .join(" <br> ")
+    .replace(/\|/g, "\\|");
+}
+
 function toMarkdownTable(html: string): string {
   const tr = html.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
   const rows = tr
     .map((row) => {
       const cells = row.match(/<(td|th)[\s\S]*?<\/\1>/gi) ?? [];
-      return cells
-        .map((c) =>
-          c
-            .replace(/<br\s*\/?>/gi, "\\n")
-            .replace(/<[^>]+>/g, " ")
-            .replace(/&nbsp;/gi, " ")
-            .replace(/\s+/g, " ")
-            .trim()
-        )
-        .filter(Boolean);
+      return cells.map(normalizeCell);
     })
-    .filter((r) => r.length > 0);
+    .filter((r) => r.some(Boolean));
 
   if (!rows.length) return "";
 
   const header = rows[0];
   const body = rows.slice(1);
-  const sep = new Array(header.length).fill("---");
+  const cols = Math.max(1, header.length);
+  const sep = new Array(cols).fill("---");
   const lines = [
-    `| ${header.join(" | ")} |`,
+    `| ${new Array(cols).fill("").map((_, i) => header[i] ?? "").join(" | ")} |`,
     `| ${sep.join(" | ")} |`,
     ...body.map((r) =>
-      `| ${new Array(header.length)
+      `| ${new Array(cols)
         .fill("")
         .map((_, i) => r[i] ?? "")
         .join(" | ")} |`
@@ -52,6 +61,7 @@ function toMarkdownTable(html: string): string {
 
   return lines.join("\n");
 }
+
 
 // ✅ 관리자 체크: 프론트에서 headers["x-user"] = JSON.stringify(user) 로 전달
 function isAdmin(req: NextRequest) {
@@ -88,12 +98,12 @@ export async function GET(req: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    const lines: string[] = [`# ${doc.filename}`];
+    const lines: string[] = [];
 
     for (const b of blocks ?? []) {
       if (b.kind === "table" && b.table_html) {
         const table = toMarkdownTable(b.table_html);
-        if (table) lines.push("\n## 표", table);
+        if (table) lines.push(table);
         continue;
       }
 
@@ -226,3 +236,4 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
   }
 }
+

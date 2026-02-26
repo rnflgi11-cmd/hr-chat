@@ -153,22 +153,34 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // documents insert (스키마에 맞게 컬럼명 정리)
-        // documents: filename, mime_type(있으면), size_bytes(있으면) 정도
-        const { data: doc, error: e1 } = await sb
-          .from("documents")
-          .insert({
-            filename: file.name,
-            mime_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            size_bytes: buf.length,
-            // storage_path를 쓰는 구조면 여기에 storage upload 로직을 붙여야 함 (지금은 DB-only)
-            storage_path: `db-only/${Date.now()}_${file.name}`,
-          })
-          .select("id")
-          .single();
+        // documents insert (스키마 호환: content_type / mime_type 모두 시도)
+        const basePayload = {
+          filename: file.name,
+          size_bytes: buf.length,
+          storage_path: `db-only/${Date.now()}_${file.name}`,
+        };
 
-        if (e1) {
-          results.push({ filename: file.name, ok: false, error: e1.message });
+        let doc: { id: string } | null = null;
+        let e1: Error | null = null;
+
+        const payloads = [
+          { ...basePayload, content_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+          { ...basePayload, mime_type: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+          basePayload,
+        ];
+
+        for (const payload of payloads) {
+          const ins = await sb.from("documents").insert(payload).select("id").single();
+          if (!ins.error && ins.data?.id) {
+            doc = { id: String(ins.data.id) };
+            e1 = null;
+            break;
+          }
+          e1 = new Error(ins.error?.message ?? "documents insert failed");
+        }
+
+        if (!doc || e1) {
+          results.push({ filename: file.name, ok: false, error: e1?.message ?? "documents insert failed" });
           continue;
         }
 
