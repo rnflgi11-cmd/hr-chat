@@ -14,6 +14,12 @@ type Doc = {
   can_preview?: boolean;
 };
 
+type UploadProgressItem = {
+  filename: string;
+  status: "pending" | "uploading" | "done" | "failed";
+  error?: string;
+};
+
 export default function AdminPage() {
   const user = useMemo(
     () => (typeof window !== "undefined" ? loadSessionUser() : null),
@@ -25,6 +31,7 @@ export default function AdminPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressItem[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -70,52 +77,81 @@ export default function AdminPage() {
       setMsg("파일을 선택해 주세요.");
       return;
     }
+    
     setBusy(true);
-    setMsg("업로드 중...");
+    setUploadProgress(files.map((f) => ({ filename: f.name, status: "pending" })));
+    setMsg(`업로드 중... (0/${files.length})`);
+
+    let okCount = 0;
+    const failItems: Array<{ filename: string; error: string }> = [];
 
     try {
-      const form = new FormData();
-      files.forEach((file) => form.append("files", file));
-      form.append("user", JSON.stringify(user));
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress((prev) =>
+          prev.map((it, idx) => (idx === i ? { ...it, status: "uploading" } : it))
+        );
+        setMsg(`업로드 중... (${i + 1}/${files.length}) ${file.name}`);
 
-      const res = await fetch("/api/admin/upload", {
-        method: "POST",
-        body: form,
-      });
-      const json = await res.json();
+        const form = new FormData();
+        form.append("files", file);
+        form.append("user", JSON.stringify(user));
 
-if (!res.ok) {
-  setMsg(json.error ?? "업로드 실패");
-  return;
-}
+        const res = await fetch("/api/admin/upload", {
+          method: "POST",
+          body: form,
+        });
+        const json = await res.json();
 
-const results = json.results ?? [];
-const okCount = results.filter((r: any) => r.ok).length;
-const fail = results.filter((r: any) => !r.ok);
+        if (!res.ok) {
+          const error = (json?.error ?? "업로드 실패").toString();
+          failItems.push({ filename: file.name, error });
+          setUploadProgress((prev) =>
+            prev.map((it, idx) => (idx === i ? { ...it, status: "failed", error } : it))
+          );
+          continue;
+        }
 
-if (fail.length > 0) {
-  const lines = fail
-    .slice(0, 5)
-    .map((r: any) => `- ${r.filename}: ${r.error ?? "실패"}`)
-    .join("\n");
+        const r0 = Array.isArray(json?.results) ? json.results[0] : null;
+        const ok = !!r0?.ok;
 
-  setMsg(
-    `부분 실패: 성공 ${okCount} / 실패 ${fail.length}\n` +
-      lines +
-      (fail.length > 5 ? `\n...외 ${fail.length - 5}건` : "")
-  );
-} else {
-  setMsg(`업로드 완료! (${okCount}개)`);
-  setFiles([]);
-}
+        if (ok) {
+          okCount += 1;
+          setUploadProgress((prev) =>
+            prev.map((it, idx) => (idx === i ? { ...it, status: "done" } : it))
+          );
+        } else {
+          const error = (r0?.error ?? "업로드 실패").toString();
+          failItems.push({ filename: file.name, error });
+          setUploadProgress((prev) =>
+            prev.map((it, idx) => (idx === i ? { ...it, status: "failed", error } : it))
+          );
+        }
+      }
 
-await refresh();
+      if (failItems.length > 0) {
+        const lines = failItems
+          .slice(0, 5)
+          .map((r) => `- ${r.filename}: ${r.error}`)
+          .join("\n");
+
+        setMsg(
+          `부분 실패: 성공 ${okCount} / 실패 ${failItems.length}\n` +
+            lines +
+            (failItems.length > 5 ? `\n...외 ${failItems.length - 5}건` : "")
+        );
+      } else {
+        setMsg(`업로드 완료! (${okCount}개)`);
+      }
+
+      await refresh();
     } finally {
       setBusy(false);
       setFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
+
 
   async function copySource(doc: Doc) {
     try {
@@ -144,7 +180,7 @@ await refresh();
       setBusy(false);
     }
   }
-  
+
 
   async function removeDoc(docId: string) {
     if (!confirm("정말 삭제할까요? (스토리지/DB에서 삭제됩니다)")) return;
@@ -295,7 +331,11 @@ await refresh();
               type="file"
               multiple
               accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              onChange={(e) => {
+                const next = Array.from(e.target.files ?? []);
+                setFiles(next);
+                setUploadProgress(next.map((f) => ({ filename: f.name, status: "pending" })));
+              }}
               disabled={busy}
               className="block w-full rounded-2xl bg-white/5 px-4 py-3 text-sm text-white/80 ring-1 ring-white/10 file:mr-4 file:rounded-xl file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white/80 hover:file:bg-white/15"
             />
@@ -303,6 +343,22 @@ await refresh();
               {busy ? "처리 중..." : "업로드"}
             </button>
           </div>
+
+          {uploadProgress.length > 0 && (
+            <div className="mt-3 space-y-1 rounded-2xl bg-white/4 p-3 ring-1 ring-white/10">
+              {uploadProgress.map((u, idx) => (
+                <div key={`${u.filename}_${idx}`} className="flex items-center justify-between text-xs text-white/75">
+                  <span className="truncate pr-2">{u.filename}</span>
+                  <span>
+                    {u.status === "pending" && "대기"}
+                    {u.status === "uploading" && "업로드 중"}
+                    {u.status === "done" && "완료"}
+                    {u.status === "failed" && `실패${u.error ? `: ${u.error}` : ""}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {msg && (
             <div className="mt-4 rounded-2xl bg-white/6 p-3 text-sm text-white/80 ring-1 ring-white/10">

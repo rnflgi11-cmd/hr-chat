@@ -47,7 +47,27 @@ function htmlToBlocks(html: string) {
     if (text) blocks.push({ kind: "paragraph", text });
   };
 
-  // body 직계 자식 순서 유지 + 목록/글머리 처리
+  const walkList = (listEl: any, depth: number, ordered: boolean) => {
+    const list = $(listEl);
+    const lis = list.children("li").toArray();
+
+    lis.forEach((li, idx) => {
+      const liNode = $(li);
+      const lineNode = liNode.clone();
+      lineNode.children("ul,ol").remove();
+
+      const indent = " ".repeat(depth * 2);
+      const marker = ordered ? `${idx + 1}. ` : "• ";
+      const lineText = normalizeText(lineNode.text());
+      if (lineText) addParagraph(lineText, `${indent}${marker}`);
+
+      liNode.children("ul,ol").each((_, childList) => {
+        const childTag = ((childList as any).tagName ?? "").toLowerCase();
+        walkList(childList, depth + 1, childTag === "ol");
+      });
+    });
+  };
+
   body.children().each((_, node) => {
     const $node = $(node);
     const tag = (node.tagName ?? "").toLowerCase();
@@ -64,14 +84,9 @@ function htmlToBlocks(html: string) {
       }
       return;
     }
-  
-  // table/p가 하나도 안 잡히면 body 전체 텍스트를 1개 문단으로
-    if (["ul", "ol"].includes(tag)) {
-      $node.children("li").each((idx, li) => {
-        const liText = $(li).text();
-        const prefix = tag === "ol" ? `${idx + 1}. ` : "• ";
-        addParagraph(liText, prefix);
-      });
+
+    if (tag === "ul" || tag === "ol") {
+      walkList(node as any, 0, tag === "ol");
       return;
     }
 
@@ -149,7 +164,7 @@ export async function POST(req: NextRequest) {
       try {
         const buf = Buffer.from(await file.arrayBuffer());
 
-                // 같은 파일명 기존 문서가 있으면 이전 버전 정리(최신 업로드만 유지)
+      // 같은 파일명 기존 문서가 있으면 이전 버전 정리(최신 업로드만 유지)
         const { data: existingDocs } = await sb
           .from("documents")
           .select("id")
@@ -182,7 +197,7 @@ export async function POST(req: NextRequest) {
           results.push({ filename: file.name, ok: false, error: "no text/table blocks detected" });
           continue;
         }
-
+        
         // documents insert (스키마 호환: content_type / mime_type 모두 시도)
         const typed = file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
         const basePayload = {
