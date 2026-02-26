@@ -67,7 +67,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
   }
   const doc = await loadDocFilename(sb, bestDocId);
-  const ctx = await buildWindowContext({ sb, q, bestDocId, hits, scoreRow });
+  const ctx = await buildWindowContext({ sb, bestDocId, hits, scoreRow });
 
   const evidenceAll = toEvidence(doc.filename, ctx);
   const normalizedEvidence = evidenceAll.map(e => ({ ...e, table_ok: e.table_ok ?? false }));
