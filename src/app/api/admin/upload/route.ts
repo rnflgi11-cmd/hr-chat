@@ -42,8 +42,8 @@ function htmlToBlocks(html: string) {
 
   const body = $("body");
 
-  // body 아래의 table, p만 순서대로 수집
-  const elements = body.find("table, p").toArray();
+  // body 직계 자식만 순서대로 수집(표 내부 p 중복 방지)
+  const elements = body.children().toArray();
 
   for (const el of elements as any[]) {
     const tag = (el as any).tagName?.toLowerCase?.() ?? "";
@@ -59,7 +59,7 @@ function htmlToBlocks(html: string) {
           table_html: sanitizeTableHtml(tableHtml),
         });
       }
-    } else {
+    } else if (["p", "h1", "h2", "h3", "h4", "li", "div", "section", "article"].includes(tag)) {
       const text = normalizeText($(el).text());
       if (text) blocks.push({ kind: "paragraph", text });
     }
@@ -135,6 +135,22 @@ export async function POST(req: NextRequest) {
       try {
         const buf = Buffer.from(await file.arrayBuffer());
 
+                // 같은 파일명 기존 문서가 있으면 이전 버전 정리(최신 업로드만 유지)
+        const { data: existingDocs } = await sb
+          .from("documents")
+          .select("id")
+          .eq("filename", file.name);
+
+        const existingIds = (existingDocs ?? [])
+          .map((d: { id?: unknown }) => d?.id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+        if (existingIds.length) {
+          await sb.from("document_blocks").delete().in("document_id", existingIds);
+          await sb.from("document_chunks").delete().in("document_id", existingIds);
+          await sb.from("documents").delete().in("id", existingIds);
+        }
+        
         // DOCX -> HTML
         const { value: html } = await mammoth.convertToHtml(
           { buffer: buf },
