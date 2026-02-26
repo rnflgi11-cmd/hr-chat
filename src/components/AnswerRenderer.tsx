@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import MarkdownView from "@/components/MarkdownView";
 
 type Block = {
   id?: string;
@@ -76,7 +77,7 @@ function clampText(s: string, max = 520) {
 }
 
 function SafeHTML({ html }: { html: string }) {
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="source-table-html" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 export default function AnswerRenderer({ data }: { data: unknown }) {
@@ -102,7 +103,7 @@ export default function AnswerRenderer({ data }: { data: unknown }) {
           overflow: "visible",
         }}
       >
-        {answer || "답변을 생성하지 못했습니다."}
+        {answer ? <MarkdownView text={answer} /> : "답변을 생성하지 못했습니다."}
       </div>
 
       {/* 근거 토글 */}
@@ -136,6 +137,22 @@ export default function AnswerRenderer({ data }: { data: unknown }) {
           ))}
         </div>
       )}
+            <style jsx global>{`
+        .source-table-html table {
+          border-collapse: collapse;
+          width: 100%;
+          min-width: 680px;
+          table-layout: auto;
+        }
+        .source-table-html th,
+        .source-table-html td {
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          padding: 8px 10px;
+          vertical-align: top;
+          white-space: normal;
+          word-break: break-word;
+        }
+      `}</style>
     </div>
   );
 }
@@ -214,7 +231,7 @@ function ParagraphBlock({ b }: { b: Block }) {
           fontSize: 13,
         }}
       >
-        {more ? raw : text}
+        <MarkdownView text={more ? raw : text} />
       </div>
 
       {clamped && (

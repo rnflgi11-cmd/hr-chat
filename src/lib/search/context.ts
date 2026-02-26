@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Evidence as SearchEvidence } from "./types";
 
 /**
  * ⚠️ index.ts와의 결합 유지:
@@ -39,27 +40,6 @@ export type DocInfo = {
   open_url?: string;
 };
 
-export type Evidence = {
-  document_id?: string;
-  filename: string;
-  chunk_index: number;
-  open_url?: string;
-
-  // ✅ index.ts UI가 사용하는 값 유지
-  block_type: "p" | "table_html";
-
-  // 표준 payload
-  content_text?: string; // for "p"
-  content_html?: string; // for "table_html"
-
-  // ✅ table 검증
-  table_ok?: boolean;
-
-  sim?: number;
-  score?: number;
-
-  raw?: any;
-};
 
 function normalizeText(rawText: string) {
   const t = (rawText || "").replace(/\r/g, "").trim();
@@ -127,13 +107,11 @@ export async function loadDocFilename(sb: SupabaseClient, documentId: string): P
  */
 export async function buildWindowContext({
   sb,
-  q,
   bestDocId,
   hits,
   scoreRow,
 }: {
   sb: SupabaseClient;
-  q: string;
   bestDocId: string;
   hits: any[];
   scoreRow: (h: any) => number;
@@ -146,7 +124,13 @@ export async function buildWindowContext({
     .map((h) => ({
       h,
       s: typeof h?.score === "number" ? h.score : typeof h?.sim === "number" ? h.sim : scoreRow(h),
-      idx: Number.isFinite(Number(h?.chunk_index)) ? Number(h.chunk_index) : Number.isFinite(Number(h?.idx)) ? Number(h.idx) : 0,
+            idx: Number.isFinite(Number(h?.chunk_index))
+        ? Number(h.chunk_index)
+        : Number.isFinite(Number(h?.block_index))
+          ? Number(h.block_index)
+          : Number.isFinite(Number(h?.idx))
+            ? Number(h.idx)
+            : 0,
     }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 6);
@@ -225,9 +209,9 @@ export async function buildWindowContext({
  *    - text는 전부 block_type="p"로 통일 + content_text에 합쳐서 넣기
  *    - table은 block_type="table_html" 유지 + content_html 필수(없으면 table_ok=false)
  */
-export function toEvidence(filename: string, ctx: ContextBlock[]): Evidence[] {
+export function toEvidence(filename: string, ctx: ContextBlock[]): SearchEvidence[] {
   const blocks = Array.isArray(ctx) ? ctx : [];
-  const out: Evidence[] = [];
+  const out: SearchEvidence[] = [];
 
   for (const b of blocks) {
     const bt = (b?.block_type ?? "").toString().toLowerCase();
@@ -237,16 +221,10 @@ export function toEvidence(filename: string, ctx: ContextBlock[]): Evidence[] {
 
     if (looksTable) {
       out.push({
-        document_id: b.document_id,
         filename: b.filename || filename,
-        chunk_index: Number.isFinite(Number(b.chunk_index)) ? Number(b.chunk_index) : 0,
-        open_url: b.open_url,
         block_type: "table_html",
-        content_html: html || undefined,
+        content_html: html || null,
         table_ok: !!html, // html 없으면 false
-        sim: b.sim,
-        score: b.score,
-        raw: b.raw ?? b,
       });
       continue;
     }
@@ -264,18 +242,13 @@ export function toEvidence(filename: string, ctx: ContextBlock[]): Evidence[] {
     const content_text = normalizeText(text);
 
     out.push({
-      document_id: b.document_id,
       filename: b.filename || filename,
-      chunk_index: Number.isFinite(Number(b.chunk_index)) ? Number(b.chunk_index) : 0,
-      open_url: b.open_url,
       block_type: "p",
-      content_text: content_text || undefined,
-      sim: b.sim,
-      score: b.score,
-      raw: b.raw ?? b,
+      content_text: content_text || null,
+      table_ok: false,
     });
   }
 
-  out.sort((a, b) => a.chunk_index - b.chunk_index);
+  // 기존 chunk 순서 보존 (buildWindowContext에서 이미 정렬됨)
   return out; // ✅ 무조건 반환 (undefined 경로 없음)
 }
