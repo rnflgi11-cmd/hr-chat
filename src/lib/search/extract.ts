@@ -318,13 +318,25 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
   const pickSection = (name: RegExp) => {
     const idx = ps.findIndex((x) => name.test(x));
     if (idx < 0) return [];
+
     const out: string[] = [];
+    
+        // 헤더 라인에 본문이 같이 붙은 경우: "■ 시행일: 2025-01-01"
+    const head = ps[idx] ?? "";
+    const inline = head
+      .replace(/^[-•◦▪■◆▶▷◊\s]*/g, "")
+      .replace(name, "")
+      .replace(/^\s*[:：-]\s*/, "")
+      .trim();
+    if (inline) out.push(inline);
+
     for (let i = idx + 1; i < ps.length; i++) {
       const line = ps[i];
-      if (/시행일|대상|기준|사용\s*절차|사용절차/.test(line)) break;
+      if (/^(?:[-•◦▪■◆▶▷◊\s]*)?(시행일|대상|기준|사용\s*절차|사용절차)\b/.test(line)) break;
       if (!line) continue;
       out.push(line);
     }
+
     return out;
   };
 

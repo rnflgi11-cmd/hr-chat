@@ -1,7 +1,7 @@
 "use client";
 
 import AdminNav from "@/components/AdminNav";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { loadSessionUser } from "@/lib/auth";
 
 type Doc = {
@@ -25,6 +25,8 @@ export default function AdminPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ✅ 체크박스 선택 상태
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -110,15 +112,17 @@ if (fail.length > 0) {
 await refresh();
     } finally {
       setBusy(false);
+      setFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
-    async function copySource(doc: Doc) {
+  async function copySource(doc: Doc) {
     try {
       setBusy(true);
       setMsg("원문 불러오는 중...");
 
-      const res = await fetch(`/api/admin/docs/${doc.id}`);
+      const res = await fetch(`/api/admin/docs?docId=${encodeURIComponent(doc.id)}`);
       const json = await res.json();
 
       if (!res.ok) {
@@ -141,6 +145,7 @@ await refresh();
     }
   }
   
+
   async function removeDoc(docId: string) {
     if (!confirm("정말 삭제할까요? (스토리지/DB에서 삭제됩니다)")) return;
 
@@ -286,6 +291,7 @@ await refresh();
 
           <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
             <input
+              ref={fileInputRef}
               type="file"
               multiple
               accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
