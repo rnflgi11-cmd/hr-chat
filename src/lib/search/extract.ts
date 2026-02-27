@@ -129,6 +129,27 @@ function dedupeTextLines(lines: string[]): string[] {
   return out;
 }
 
+function canonicalLine(line: string): string {
+  return normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊]+\s*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "")
+    .replace(/[\s:：]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function dedupeStableLines(lines: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const canonical = canonicalLine(line);
+    if (!canonical || seen.has(canonical)) continue;
+    seen.add(canonical);
+    out.push(line);
+  }
+  return out;
+}
+
 function buildCondolenceDaysAnswerFromTables(question: string, blocks: Evidence[]): string | null {
   if (!isCondolenceLeaveDaysQuestion(question)) return null;
 
@@ -488,15 +509,7 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
   if (!lines.length) return null;
 
   if (isCompactDoc(lines)) {
-    const all: string[] = [];
-    const seen = new Set<string>();
-    for (const line of lines) {
-      const cleaned = `- ${line.replace(/^•\s*/g, "")}`;
-      const key = cleaned.replace(/\s+/g, " ").trim();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      all.push(cleaned);
-    }
+    const all = dedupeStableLines(lines.map((line) => `- ${line.replace(/^•\s*/g, "")}`));
     return ["## 신청 절차", ...all].join("\n");
   }
 
@@ -520,14 +533,7 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
     .slice(0, 6);
 
   const bodyRaw = (picked.length ? picked : slice).map((x) => `- ${x.replace(/^•\s*/g, "")}`);
-  const body: string[] = [];
-  const seenBody = new Set<string>();
-  for (const line of bodyRaw) {
-    const key = line.replace(/\s+/g, " ").trim();
-    if (!key || seenBody.has(key)) continue;
-    seenBody.add(key);
-    body.push(line);
-  }
+  const body = dedupeStableLines(bodyRaw);
 
   return ["## 신청 절차", ...body].join("\n");
 }
@@ -591,28 +597,23 @@ function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: Ques
   if (!tables.length && !paragraphs.length) return null;
 
   const out: string[] = [];
+  const preferTableOnly = qType === "days" || qType === "list";
+  const preferSectionOnly = wantsProcedure && !explicitFull && !wantsTable;
 
-  if (tables.length && (!wantsProcedure || explicitFull || wantsTable)) {
+  if (tables.length && !preferSectionOnly) {
     const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}
 ${t.tableMd}`);
     out.push("## 관련 원문(표)", ...pickedTables);
   }
 
-  if (paragraphs.length) {
+  if (paragraphs.length && !preferTableOnly) {
     const bestIdx = paragraphs.reduce((best, cur, i, arr) => (cur.score > arr[best].score ? i : best), 0);
     const start = Math.max(0, bestIdx - 3);
     const sectionLines = paragraphs
       .slice(start, start + 14)
       .map((x) => `- ${x.line.replace(/^•\s*/g, "")}`);
 
-    const uniqueSectionLines: string[] = [];
-    const seen = new Set<string>();
-    for (const line of sectionLines) {
-      const key = line.replace(/\s+/g, " ").trim();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      uniqueSectionLines.push(line);
-    }
+    const uniqueSectionLines = dedupeStableLines(sectionLines);
 
     if (uniqueSectionLines.length) {
       out.push("## 관련 원문(섹션)", ...uniqueSectionLines);
@@ -694,9 +695,6 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     (b: any) => b.block_type === "table_html" && /<table[\s>]/i.test((b as any).content_html ?? "")
   );
 
-  const fullSource = buildFullSourceAnswer(question, blocks, qType);
-  if (fullSource) return { ok: true, type: qType, answer_md: fullSource };
-
   for (const b of tableBlocks) {
     const html = (b as any).content_html ?? "";
     let grid: string[][] = [];
@@ -742,5 +740,8 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     if (md !== FALLBACK) return { ok: true, type: "criteria", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
   }
 
+    const fullSource = buildFullSourceAnswer(question, blocks, qType);
+  if (fullSource) return { ok: true, type: qType, answer_md: fullSource };
+  
   return { ok: false, type: qType, answer_md: FALLBACK };
 }
