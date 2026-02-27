@@ -168,6 +168,29 @@ ${h.table_html ?? ""}`;
   return softened.length ? softened : hits;
 }
 
+function applyCondolenceLeaveStrictFilter(question: string, hits: Row[]): Row[] {
+  if (!/경조\s*휴가|경조휴가/.test(question)) return hits;
+
+  const includeCore = /(경조\s*휴가|경조휴가|경조유형|조의|조문|부고|사망|결혼)/;
+  const includeDays = /(\d+\s*일|휴가일수|일수|근속\s*2년|근속2년)/;
+  const excludeNoise = /(안식년|선연차|프로젝트\s*수당|프로젝트수당|수당\s*정산|화환\s*신청|화환신청)/;
+
+  const strict = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeCore.test(hay) && includeDays.test(hay) && !excludeNoise.test(hay);
+  });
+  if (strict.length) return strict;
+
+  const coreOnly = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeCore.test(hay) && !excludeNoise.test(hay);
+  });
+
+  return coreOnly.length ? coreOnly : hits;
+}
+
 function applyLeaveDaysSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/(며칠|몇\s*일|일수|기간)/.test(question)) return hits;
   if (!/(경조|경조\s*휴가|휴가)/.test(question)) return hits;
@@ -303,6 +326,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   }
 
   hits = applyWreathSafetyFilter(question, hits);
+  hits = applyCondolenceLeaveStrictFilter(question, hits);
   hits = applyLeaveDaysSafetyFilter(question, hits);
 
   const scoreRow = makeScorer({ q: question, used, anchors });
