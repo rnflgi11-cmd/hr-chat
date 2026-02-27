@@ -139,6 +139,58 @@ ${h.table_html ?? ""}`;
   return withoutCautionOnly.length ? withoutCautionOnly : hits;
 }
 
+function tryAnnualLeaveEstimator(question: string): SearchAnswer | null {
+  const q = question.replace(/\s+/g, " ").trim();
+  if (!/입사/.test(q) || !/연차/.test(q)) return null;
+  if (!/(올해|금년|이번\s*해|지금|몇\s*개|며칠|일수)/.test(q)) return null;
+
+  const yearMatch = q.match(/(19\d{2}|20\d{2})\s*년/);
+  if (!yearMatch) return null;
+  const joinYear = Number(yearMatch[1]);
+  if (!Number.isFinite(joinYear)) return null;
+
+  const monthMatch = q.match(/(19\d{2}|20\d{2})\s*년\s*(\d{1,2})\s*월/);
+  const joinMonth = monthMatch ? Number(monthMatch[2]) : null;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const yearsCompleted = currentYear - joinYear;
+
+  let estimate = 0;
+  let basis = "";
+
+  if (yearsCompleted <= 0) {
+    if (joinMonth && joinMonth >= 1 && joinMonth <= 12) {
+      estimate = Math.max(0, Math.min(11, currentMonth - joinMonth));
+      basis = `1년 미만 월 개근 기준(입사월 ${joinMonth}월 반영, 최대 11일)`;
+    } else {
+      estimate = 11;
+      basis = "1년 미만 월 개근 기준(최대 11일, 정확 계산에는 입사월 필요)";
+    }
+  } else {
+    estimate = 15 + Math.floor((yearsCompleted - 1) / 2);
+    estimate = Math.min(25, estimate);
+    basis = "근속 1년 이상: 15일 + 2년마다 1일 가산(최대 25일)";
+  }
+
+  const answer = [
+    "## 연차 계산(추정)",
+    `- 입사연도: ${joinYear}년`,
+    `- 기준연도: ${currentYear}년`,
+    `- 추정 연차: **${estimate}일**`,
+    `- 계산 기준: ${basis}`,
+    "- 안내: 최종 연차는 회사 취업규칙/회계연도 기준, 입사일(월/일), 소진/이월 정책에 따라 달라질 수 있습니다.",
+  ].join("\n");
+
+  return {
+    ok: true,
+    answer,
+    hits: [],
+    meta: { intent: "연차 계산" },
+  };
+}
+
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
@@ -169,6 +221,10 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const { cleanedQuestion, preferredDocHint } = parseQuestionContext(q);
   const question = cleanedQuestion || q;
   const intent = inferIntent(question);
+  
+  const annualLeave = tryAnnualLeaveEstimator(question);
+  if (annualLeave) return annualLeave;
+
   const noResultFallback =
     "질문과 정확히 일치하는 규정 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요.\n" +
     "예) '경조휴가 부모상 일수', '기타휴가 병가 기준'";

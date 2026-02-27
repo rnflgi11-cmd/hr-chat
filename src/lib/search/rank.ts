@@ -29,10 +29,16 @@ export function makeScorer(params: { q: string; used: string[]; anchors: string[
     }
 
     // patterns
-    if (/며칠|일수|몇일/.test(q) && /\d+\s*일/.test(hay)) s += 35;
+    if (/며칠|일수|몇일|몇\s*일/.test(q) && /\d+\s*일/.test(hay)) s += 35;
     if (/얼마|금액|수당/.test(q) && /\d+[,0-9]*\s*원/.test(hay)) s += 35;
 
-        // 화환 질문은 관련 표현을 강하게 우대하고, 경조금 표 패턴은 감점
+    // 경조휴가 일수 질문은 일수/표 근거를 강하게 우대하고 유의사항-only는 감점
+    if (/(며칠|일수|몇일|몇\s*일)/.test(q) && /(경조|휴가)/.test(q)) {
+      if (/(\d+\s*일|휴가일수|일수|경조유형|근속\s*2년|근속2년)/.test(hay)) s += 55;
+      if (/(유의사항|사전\s*휴가\s*신청\s*사유|사후\s*휴가\s*신청\s*사유)/.test(hay) && !/(\d+\s*일|휴가일수|일수)/.test(hay)) s -= 45;
+    }
+
+    // 화환 질문은 관련 표현을 강하게 우대하고, 경조금 표 패턴은 감점
     if (/화환/.test(q)) {
       if (/(화환|발주|신청서|도착|배송)/.test(hay)) s += 45;
       if (/(경조금|조위금|근속\s*2년|근속2년)/.test(hay)) s -= 35;

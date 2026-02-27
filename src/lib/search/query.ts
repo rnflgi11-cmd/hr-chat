@@ -61,8 +61,8 @@ export function expandQueryTerms(q: string, terms: string[]): string[] {
   }
 
   // ✅ 경조휴가/안식년/프로젝트수당 등 붙여쓰기 보강
-  if (noSpace.includes("경조휴가")) {
-    out.add("경조 휴가");
+  if (noSpace.includes("경조휴가") || (/경조/.test(raw) && /휴가/.test(raw))) {
+    out.add("경조휴가");
     out.add("경조");
     out.add("휴가");
   }
@@ -84,7 +84,7 @@ export function expandQueryTerms(q: string, terms: string[]): string[] {
     out.add("도착");
     out.add("배송");
   }
-  
+
   // ✅ terms 중 "OO휴가" 형태도 띄어쓰기 버전 추가 (예: 경조휴가, 기타휴가)
   for (const t of terms ?? []) {
     const tt = (t ?? "").trim();
