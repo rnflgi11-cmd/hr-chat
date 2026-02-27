@@ -50,6 +50,40 @@ async function tryPreferDocumentHits(
   return preferred.length ? preferred : hits;
 }
 
+async function tryPreferTopicDocumentHits(
+  sb: Awaited<ReturnType<typeof retrieveCandidates>>["sb"],
+  hits: Row[],
+  question: string
+): Promise<Row[]> {
+  const q = question.replace(/\s+/g, " ").trim();
+  const hints: string[] = [];
+
+  if (/경조\s*휴가|경조휴가/.test(q)) hints.push("경조휴가", "경조 휴가", "경조");
+  if (/안식년/.test(q)) hints.push("안식년");
+  if (/화환/.test(q)) hints.push("화환");
+  if (/프로젝트\s*수당|프로젝트수당/.test(q)) hints.push("프로젝트 수당", "프로젝트수당");
+
+  const uniqHints = Array.from(new Set(hints)).filter(Boolean);
+  if (!uniqHints.length) return hits;
+
+  const ids = new Set<string>();
+  for (const hint of uniqHints) {
+    const { data } = await sb
+      .from("documents")
+      .select("id, filename")
+      .ilike("filename", `%${hint}%`)
+      .limit(20);
+
+    for (const row of data ?? []) {
+      if (row?.id) ids.add(row.id);
+    }
+  }
+
+  if (!ids.size) return hits;
+  const preferred = hits.filter((h) => ids.has(h.document_id));
+  return preferred.length ? preferred : hits;
+}
+
 function formatAnswerStyle(question: string, answer: string): string {
   const raw = (answer ?? "").trim();
   if (!raw) return raw;
@@ -68,7 +102,7 @@ function formatAnswerStyle(question: string, answer: string): string {
     }
     return deduped.join("\n");
   }
-  
+
   const lines = raw.split("\n").map((x) => x.trim()).filter(Boolean);
   const bullets = lines.filter((x) => x.startsWith("- "));
   if (!bullets.length) return raw;
@@ -103,6 +137,7 @@ function formatAnswerStyle(question: string, answer: string): string {
 
   return out.join("\n");
 }
+
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/화환/.test(question)) return hits;
@@ -250,7 +285,8 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const anchors = pickAnchors(used);
 
   const { sb, hits: rawHits0 } = await retrieveCandidates(question, used);
-  const rawHits = await tryPreferDocumentHits(sb, rawHits0, preferredDocHint);
+  const rawHits1 = await tryPreferDocumentHits(sb, rawHits0, preferredDocHint);
+  const rawHits = await tryPreferTopicDocumentHits(sb, rawHits1, question);
 
   if (!rawHits.length) {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
