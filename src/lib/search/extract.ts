@@ -106,6 +106,11 @@ function normalizeEventKeywords(q: string): string[] {
 }
 
 /** ===== HTML table 파서 (cheerio 없이) ===== */
+function hasSpecificLeaveEvent(q: string): boolean {
+  const s = normalizeText(q);
+  return /(부모|부친|모친|아버지|어머니|배우자|자녀|형제|자매|조부|조모|외조부|외조모|본인|결혼|출산|사망|부고|조의|조문)/.test(s);
+}
+
 function decodeHtmlEntities(s: string): string {
   return (s ?? "")
     .replace(/&nbsp;/gi, " ")
@@ -507,8 +512,17 @@ ${t.tableMd}`);
       .slice(start, start + 14)
       .map((x) => `- ${x.line.replace(/^•\s*/g, "")}`);
 
-    if (sectionLines.length) {
-      out.push("## 관련 원문(섹션)", ...sectionLines);
+    const uniqueSectionLines: string[] = [];
+    const seen = new Set<string>();
+    for (const line of sectionLines) {
+      const key = line.replace(/\s+/g, " ").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      uniqueSectionLines.push(line);
+    }
+
+    if (uniqueSectionLines.length) {
+      out.push("## 관련 원문(섹션)", ...uniqueSectionLines);
     }
   }
 
@@ -614,6 +628,12 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     if (!best) continue;
 
     if (qType === "days") {
+            const isGenericLeaveDays = /(경조|휴가)/.test(normalizeText(question)) && !hasSpecificLeaveEvent(question);
+      if (isGenericLeaveDays) {
+        const mdList = buildListAnswer(colMap, body);
+        if (mdList !== FALLBACK) return { ok: true, type: "list", answer_md: mdList, used: { filename: (b as any).filename } };
+      }
+      
       const md = buildDaysAnswer(colMap, best.row);
       if (md !== FALLBACK) return { ok: true, type: "days", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
       continue;

@@ -55,6 +55,20 @@ function formatAnswerStyle(question: string, answer: string): string {
   if (!raw) return raw;
   if (/^Q\.|^##\s/m.test(raw)) return raw;
 
+    // 일수/기준/절차형 질문은 원문 순서를 최대한 보존
+  if (/(며칠|일수|기준|절차|안식년|경조|화환|연차)/.test(question)) {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const line of raw.split("\n")) {
+      const key = line.replace(/\s+/g, " ").trim();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(line.trim());
+    }
+    return deduped.join("\n");
+  }
+  
   const lines = raw.split("\n").map((x) => x.trim()).filter(Boolean);
   const bullets = lines.filter((x) => x.startsWith("- "));
   if (!bullets.length) return raw;
