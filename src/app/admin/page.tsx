@@ -32,6 +32,7 @@ export default function AdminPage() {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressItem[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -152,6 +153,57 @@ export default function AdminPage() {
     }
   }
 
+
+  async function suggestQuestions(doc: Doc) {
+    try {
+      setBusy(true);
+      setMsg("문서 분석 중...");
+      setSuggestions([]);
+
+      const res = await fetch(`/api/admin/docs?docId=${encodeURIComponent(doc.id)}&suggestCases=1`);
+      const json = await res.json();
+
+      if (!res.ok) {
+        setMsg(json.error ?? "문서 분석 실패");
+        return;
+      }
+
+      const items = Array.isArray(json.suggested_questions)
+        ? json.suggested_questions.map((x: unknown) => String(x)).filter(Boolean)
+        : [];
+
+      if (!items.length) {
+        setMsg("추천 질문을 생성하지 못했습니다.");
+        return;
+      }
+
+      setSuggestions(items);
+      setMsg(`추천 질문 생성 완료: ${doc.filename}`);
+    } catch {
+      setMsg("추천 질문 생성에 실패했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySuggestedPrompt() {
+    if (!suggestions.length) {
+      setMsg("먼저 문서에서 질문 추천을 생성해 주세요.");
+      return;
+    }
+
+    const content = [
+      "[추천 질문 케이스]",
+      ...suggestions.map((q, i) => `${i + 1}. ${q}`),
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(content);
+      setMsg("추천 질문 템플릿을 복사했습니다.");
+    } catch {
+      setMsg("추천 질문 복사에 실패했습니다.");
+    }
+  }
 
   async function copySource(doc: Doc) {
     try {
@@ -360,6 +412,27 @@ export default function AdminPage() {
             </div>
           )}
 
+
+          {suggestions.length > 0 && (
+            <div className="mt-4 rounded-2xl bg-white/4 p-3 ring-1 ring-white/10">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-amber-100">문서 자동 추천 질문</div>
+                <button
+                  type="button"
+                  onClick={copySuggestedPrompt}
+                  className="text-xs font-semibold text-amber-200 hover:underline"
+                >
+                  템플릿 복사
+                </button>
+              </div>
+              <ol className="list-decimal space-y-1 pl-5 text-xs text-white/80">
+                {suggestions.map((item, idx) => (
+                  <li key={`${item}_${idx}`}>{item}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {msg && (
             <div className="mt-4 rounded-2xl bg-white/6 p-3 text-sm text-white/80 ring-1 ring-white/10">
               {msg}
@@ -453,13 +526,21 @@ export default function AdminPage() {
                             열기
                           </a>
                         )}
-                        <button
+                                                <button
                           type="button"
                           onClick={() => copySource(d)}
                           disabled={busy}
                           className="text-xs font-semibold text-emerald-200 hover:underline disabled:opacity-50"
                         >
                           원문 복사
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => suggestQuestions(d)}
+                          disabled={busy}
+                          className="text-xs font-semibold text-amber-200 hover:underline disabled:opacity-50"
+                        >
+                          질문 추천
                         </button>
                       </div>
 

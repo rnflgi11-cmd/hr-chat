@@ -71,6 +71,59 @@ function toMarkdownTable(html: string): string {
   return lines.join("\n");
 }
 
+function tokenizeKorean(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 2);
+}
+
+function buildSuggestedQuestions(markdown: string): string[] {
+  const lines = markdown
+    .split(/\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  const headingLines = lines.filter((line) =>
+    /^([#■✅◊]|\d+[.)]|[A-Za-z가-힣\s]+:)/.test(line)
+  );
+
+  const keywordCounts = new Map<string, number>();
+  for (const token of tokenizeKorean(markdown)) {
+    keywordCounts.set(token, (keywordCounts.get(token) ?? 0) + 1);
+  }
+
+  const topKeywords = [...keywordCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k)
+    .filter((k) => !["휴가", "기준", "사용", "안내", "경우", "가능"].includes(k))
+    .slice(0, 6);
+
+  const questions = new Set<string>();
+
+  for (const heading of headingLines.slice(0, 8)) {
+    const clean = heading.replace(/^([#■✅◊]|\d+[.)])\s*/, "").trim();
+    if (!clean) continue;
+    questions.add(`${clean} 핵심 기준을 알려줘.`);
+    questions.add(`${clean} 신청 절차를 순서대로 알려줘.`);
+  }
+
+  if (markdown.includes("|")) {
+    questions.add("표에 나온 항목을 빠짐없이 정리해줘.");
+    questions.add("휴가일수, 첨부서류, 비고를 항목별로 비교해줘.");
+  }
+
+  for (const keyword of topKeywords) {
+    questions.add(`${keyword} 관련 조건과 예외를 알려줘.`);
+  }
+
+  questions.add("원문 기준으로 필수 규정만 누락 없이 요약해줘.");
+
+  return [...questions].slice(0, 12);
+}
+
 
 // ✅ 관리자 체크: 프론트에서 headers["x-user"] = JSON.stringify(user) 로 전달
 function isAdmin(req: NextRequest) {
@@ -127,12 +180,16 @@ export async function GET(req: NextRequest) {
       lines.push(text);
     }
 
+    const markdown = lines.join("\n\n");
+    const includeCases = req.nextUrl.searchParams.get("suggestCases") === "1";
+
     return NextResponse.json({
       ok: true,
       id: docId,
       filename: doc.filename,
-      markdown: lines.join("\n\n"),
+      markdown,
       block_count: (blocks ?? []).length,
+      suggested_questions: includeCases ? buildSuggestedQuestions(markdown) : undefined,
     });
   }
 
@@ -247,8 +304,8 @@ export async function DELETE(req: NextRequest) {
       deleted_storage_files: deletedStorageFiles,
       storage_error: storageError,
     });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
