@@ -92,7 +92,7 @@ function formatAnswerStyle(question: string, answer: string): string {
   // 일수/기준/절차형 질문은 원문 순서를 최대한 보존
   if (/(며칠|일수|기준|절차|안식년|경조|화환|연차)/.test(question)) {
     const deduped: string[] = [];
-    const seen = new Set<string>();
+    const seenCanonicals: string[] = [];
     const canonical = (line: string) =>
       line
         .replace(/^#+\s*/g, "")
@@ -106,8 +106,16 @@ function formatAnswerStyle(question: string, answer: string): string {
       const trimmed = line.trim();
       if (!trimmed) continue;
       const key = canonical(trimmed);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
+      if (!key) continue;
+
+      const nearDup = seenCanonicals.some((k) => {
+        if (k === key) return true;
+        if (k.length < 8 || key.length < 8) return false;
+        return k.includes(key) || key.includes(k);
+      });
+      if (nearDup) continue;
+
+      seenCanonicals.push(key);
       deduped.push(trimmed);
     }
     return deduped.join("\n");

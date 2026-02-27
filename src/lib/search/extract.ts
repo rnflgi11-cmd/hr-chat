@@ -140,13 +140,23 @@ function canonicalLine(line: string): string {
 
 function dedupeStableLines(lines: string[]): string[] {
   const out: string[] = [];
-  const seen = new Set<string>();
+  const seenCanonicals: string[] = [];
+
   for (const line of lines) {
     const canonical = canonicalLine(line);
-    if (!canonical || seen.has(canonical)) continue;
-    seen.add(canonical);
+    if (!canonical) continue;
+
+    const isNearDuplicate = seenCanonicals.some((k) => {
+      if (k === canonical) return true;
+      if (canonical.length < 8 || k.length < 8) return false;
+      return k.includes(canonical) || canonical.includes(k);
+    });
+
+    if (isNearDuplicate) continue;
+    seenCanonicals.push(canonical);
     out.push(line);
   }
+
   return out;
 }
 
@@ -652,6 +662,45 @@ function buildDaysAnswer(colMap: Record<string, number>, row: string[]): string 
   return `**${days}**${ctx ? ` (${ctx})` : ""}${valid ? `\n- 유효기간: ${valid}` : ""}`.trim();
 }
 
+function buildCondensedTableAnswer(question: string, blocks: Evidence[], qType: QuestionKind): string | null {
+  const qTokens = tokenizeKo(question);
+  const normKeys = normalizeEventKeywords(question);
+
+  const tables = (blocks ?? [])
+    .filter((b) => b.block_type === "table_html" && /<table[\s>]/i.test(b.content_html ?? ""))
+    .map((b) => {
+      const grid = tableHtmlToGrid(b.content_html ?? "");
+      const headerInfo = findHeaderRow(grid);
+      if (!headerInfo) return null;
+      const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+      if (!body.length) return null;
+
+      const joined = [headerInfo.header.join(" "), ...body.map((r) => r.join(" "))].join(" ");
+      const score = scoreRow(qTokens, normKeys, joined);
+      return { header: headerInfo.header, body, score };
+    })
+    .filter((x): x is { header: string[]; body: string[][]; score: number } => !!x)
+    .sort((a, b) => b.score - a.score);
+
+  if (!tables.length) return null;
+
+  const best = tables[0];
+  const colMap = buildColMap(best.header);
+  const listMd = buildListAnswer(colMap, best.body);
+  if (listMd === FALLBACK) return null;
+
+  const lines = dedupeStableLines(listMd.split("\n").filter(Boolean));
+  if (!lines.length) return null;
+
+  if (qType === "list" || qType === "days") {
+    return lines.slice(0, 12).join("\n");
+  }
+
+  // criteria 질문은 너무 장문으로 가지 않게 핵심 라인만 고정 출력
+  const condensed = lines.slice(0, 8);
+  return ["## 관련 기준(요약)", ...condensed].join("\n");
+}
+
 function buildCriteriaRowAnswer(colMap: Record<string, number>, row: string[], rowObj: Record<string, string>): string {
   const type = normalizeText(row[colMap.type ?? -1] ?? "") || rowObj["유형"] || "";
   const content = normalizeText(row[colMap.content ?? -1] ?? "") || rowObj["내용"] || rowObj["대상"] || "";
@@ -740,8 +789,11 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     if (md !== FALLBACK) return { ok: true, type: "criteria", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
   }
 
-    const fullSource = buildFullSourceAnswer(question, blocks, qType);
+  const condensedTable = buildCondensedTableAnswer(question, blocks, qType);
+  if (condensedTable) return { ok: true, type: qType, answer_md: condensedTable };
+
+  const fullSource = buildFullSourceAnswer(question, blocks, qType);
   if (fullSource) return { ok: true, type: qType, answer_md: fullSource };
-  
+
   return { ok: false, type: qType, answer_md: FALLBACK };
 }
