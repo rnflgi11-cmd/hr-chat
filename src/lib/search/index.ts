@@ -7,6 +7,89 @@ import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence, Row } from "./types";
 import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 
+type QuestionContext = {
+  cleanedQuestion: string;
+  preferredDocHint?: string;
+};
+
+function parseQuestionContext(q: string): QuestionContext {
+  const m = q.match(/^\s*\[([^\]]+)\]\s*/);
+  if (!m) return { cleanedQuestion: q.trim() };
+  const preferredDocHint = m[1]?.trim();
+  const cleanedQuestion = q.replace(/^\s*\[[^\]]+\]\s*/, "").trim();
+  return {
+    cleanedQuestion: cleanedQuestion || q.trim(),
+    preferredDocHint: preferredDocHint || undefined,
+  };
+}
+
+async function tryPreferDocumentHits(
+  sb: Awaited<ReturnType<typeof retrieveCandidates>>["sb"],
+  hits: Row[],
+  preferredDocHint?: string
+): Promise<Row[]> {
+  if (!preferredDocHint) return hits;
+
+  const hint = preferredDocHint
+    .replace(/\.docx?$|\.pdf$/gi, "")
+    .replace(/^\d+[_-]*/, "")
+    .trim();
+
+  if (!hint) return hits;
+
+  const { data } = await sb
+    .from("documents")
+    .select("id, filename")
+    .ilike("filename", `%${hint}%`)
+    .limit(10);
+
+  const ids = new Set((data ?? []).map((d) => d.id));
+  if (!ids.size) return hits;
+
+  const preferred = hits.filter((h) => ids.has(h.document_id));
+  return preferred.length ? preferred : hits;
+}
+
+function formatAnswerStyle(question: string, answer: string): string {
+  const raw = (answer ?? "").trim();
+  if (!raw) return raw;
+  if (/^Q\.|^##\s/m.test(raw)) return raw;
+
+  const lines = raw.split("\n").map((x) => x.trim()).filter(Boolean);
+  const bullets = lines.filter((x) => x.startsWith("- "));
+  if (!bullets.length) return raw;
+
+  const conditions = bullets.filter((x) => /(대상|조건|가능|불가|기준|해당)/.test(x));
+  const procedures = bullets.filter((x) => /(신청|절차|경로|결재|보고|요청)/.test(x));
+  const cautions = bullets.filter((x) => /(유의|주의|제외|예외|중복|미지급|소멸)/.test(x));
+  const remains = bullets.filter(
+    (x) => !conditions.includes(x) && !procedures.includes(x) && !cautions.includes(x)
+  );
+
+  const out: string[] = [];
+  out.push(`Q. ${question.trim()}`);
+  out.push("\nA. 관련 규정을 기준으로 핵심 내용을 정리하면 다음과 같습니다.");
+
+  if (conditions.length) {
+    out.push("\n신청 조건/적용 기준:");
+    out.push(...conditions);
+  }
+  if (procedures.length) {
+    out.push("\n신청 절차:");
+    out.push(...procedures);
+  }
+  if (cautions.length) {
+    out.push("\n유의 사항:");
+    out.push(...cautions);
+  }
+  if (remains.length) {
+    out.push("\n추가 확인 사항:");
+    out.push(...remains);
+  }
+
+  return out.join("\n");
+}
+
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
@@ -34,18 +117,21 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
 }
 
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
-  const intent = inferIntent(q);
-    const noResultFallback =
+  const { cleanedQuestion, preferredDocHint } = parseQuestionContext(q);
+  const question = cleanedQuestion || q;
+  const intent = inferIntent(question);
+  const noResultFallback =
     "질문과 정확히 일치하는 규정 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요.\n" +
     "예) '경조휴가 부모상 일수', '기타휴가 병가 기준'";
 
-  const terms = tokenize(q);
-  const used0 = terms.length ? terms : [q];
-  const used = expandQueryTerms(q, used0);
+  const terms = tokenize(question);
+  const used0 = terms.length ? terms : [question];
+  const used = expandQueryTerms(question, used0);
 
   const anchors = pickAnchors(used);
 
-  const { sb, hits: rawHits } = await retrieveCandidates(q, used);
+  const { sb, hits: rawHits0 } = await retrieveCandidates(question, used);
+  const rawHits = await tryPreferDocumentHits(sb, rawHits0, preferredDocHint);
 
   if (!rawHits.length) {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
@@ -61,7 +147,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     if (filtered.length) hits = filtered;
   }
 
-  const scoreRow = makeScorer({ q, used, anchors });
+  const scoreRow = makeScorer({ q: question, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
   if (!bestDocId) {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
@@ -70,16 +156,15 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const ctx = await buildWindowContext({ sb, bestDocId, hits, scoreRow });
 
   const evidenceAll = toEvidence(doc.filename, ctx);
-  const normalizedEvidence = evidenceAll.map(e => ({ ...e, table_ok: e.table_ok ?? false }));
+  const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
-  // ✅ 정답 추출 우선 (핵심)
-  const extracted = tryExtractAnswer(q, normalizedEvidence);
+  const extracted = tryExtractAnswer(question, normalizedEvidence);
 
  const draftedAnswer = extracted?.ok
     ? extracted.answer_md
-    : buildSummary(intent, normalizedEvidence, q);
+    : buildSummary(intent, normalizedEvidence, question);
 
-     const answer = (draftedAnswer ?? "").trim() || noResultFallback;
+  const answer = formatAnswerStyle(question, (draftedAnswer ?? "").trim() || noResultFallback);
 
   const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
 

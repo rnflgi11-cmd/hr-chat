@@ -80,48 +80,124 @@ function tokenizeKorean(text: string): string[] {
     .filter((x) => x.length >= 2);
 }
 
-function buildSuggestedQuestions(markdown: string): string[] {
+function normalizeHeading(line: string): string {
+  return line
+    .replace(/^([#■✅◊]|📌|▶|•|●|◦|\d+[.)])\s*/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeHeading(line: string): boolean {
+  return /^([#■✅◊📌]|\d+[.)]|[A-Za-z가-힣][A-Za-z가-힣\s]+:)/u.test(line);
+}
+
+function pickQuestionTemplate(heading: string): string[] {
+  if (/신청|절차|결재|보고|공유|작성|경로/.test(heading)) {
+    return [
+      `${heading}를 단계별로 알려줘.`,
+      `${heading}에서 결재선/담당자까지 포함해 정리해줘.`,
+    ];
+  }
+  if (/유의|주의|예외|불가|제외|중복/.test(heading)) {
+    return [`${heading}에서 반드시 지켜야 할 제한/예외를 알려줘.`];
+  }
+  if (/지급|일정|시행일|기한|유효기간/.test(heading)) {
+    return [
+      `${heading}의 적용 시점과 일정을 알려줘.`,
+      `${heading}이 지연/미충족될 때 처리 기준을 알려줘.`,
+    ];
+  }
+  if (/계산|산정|일수|금액|수당/.test(heading)) {
+    return [
+      `${heading}의 산정 기준을 예시와 함께 알려줘.`,
+      `${heading} 계산식을 항목별로 풀어서 설명해줘.`,
+    ];
+  }
+  if (/대상|자격|조건|기준|정의|인정/.test(heading)) {
+    return [
+      `${heading}에 해당하는 대상/조건을 알려줘.`,
+      `${heading}에서 제외 대상이 있다면 함께 알려줘.`,
+    ];
+  }
+  return [`${heading} 핵심 내용을 원문 기준으로 정리해줘.`];
+}
+
+function buildSuggestedQuestions(markdown: string, filename?: string): string[] {
   const lines = markdown
     .split(/\n+/)
     .map((x) => x.trim())
     .filter(Boolean);
 
-  const headingLines = lines.filter((line) =>
-    /^([#■✅◊]|\d+[.)]|[A-Za-z가-힣\s]+:)/.test(line)
-  );
+  const headingLines = lines
+    .filter((line) => looksLikeHeading(line))
+    .map(normalizeHeading)
+    .filter((line) => line.length >= 2)
+    .filter((line) => !/^(구분|유형|대상|비고|내용|첨부서류|지급 비용)$/u.test(line))
+    .filter((line) => !/^(담당자|업무 담당자|문의)\s*:/u.test(line));
+
+  const uniqueHeadings = [...new Set(headingLines)].slice(0, 12);
 
   const keywordCounts = new Map<string, number>();
   for (const token of tokenizeKorean(markdown)) {
     keywordCounts.set(token, (keywordCounts.get(token) ?? 0) + 1);
   }
 
+  const stopwords = new Set([
+    "휴가",
+    "기준",
+    "사용",
+    "안내",
+    "경우",
+    "가능",
+    "신청",
+    "관련",
+    "해당",
+    "기타",
+  ]);
+
   const topKeywords = [...keywordCounts.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([k]) => k)
-    .filter((k) => !["휴가", "기준", "사용", "안내", "경우", "가능"].includes(k))
-    .slice(0, 6);
+    .filter((k) => !stopwords.has(k))
+    .slice(0, 4);
 
   const questions = new Set<string>();
 
-  for (const heading of headingLines.slice(0, 8)) {
-    const clean = heading.replace(/^([#■✅◊]|\d+[.)])\s*/, "").trim();
-    if (!clean) continue;
-    questions.add(`${clean} 핵심 기준을 알려줘.`);
-    questions.add(`${clean} 신청 절차를 순서대로 알려줘.`);
+  for (const heading of uniqueHeadings) {
+    for (const q of pickQuestionTemplate(heading)) {
+      questions.add(q);
+    }
   }
 
   if (markdown.includes("|")) {
     questions.add("표에 나온 항목을 빠짐없이 정리해줘.");
-    questions.add("휴가일수, 첨부서류, 비고를 항목별로 비교해줘.");
+    questions.add("표 기준으로 대상별 지급기준/금액/비고를 비교해줘.");
   }
 
   for (const keyword of topKeywords) {
     questions.add(`${keyword} 관련 조건과 예외를 알려줘.`);
   }
 
+  if (/문의|담당자|연락처|메일|전화/u.test(markdown)) {
+    questions.add("문의 담당자와 연락 방법을 알려줘.");
+  }
+
+  if (/별도 신청 없음|일괄 정산|자동 지급/u.test(markdown)) {
+    questions.add("별도 신청이 필요한지 여부와 자동 처리 기준을 알려줘.");
+  }
+
+  if (/예:|case\s*\d+/iu.test(markdown)) {
+    questions.add("문서의 예시(CASE)를 기준으로 지급/미지급 판단을 설명해줘.");
+  }
+
   questions.add("원문 기준으로 필수 규정만 누락 없이 요약해줘.");
 
-  return [...questions].slice(0, 12);
+  if (filename) {
+    const name = filename.replace(/\.[^.]+$/, "").trim();
+    if (name) questions.add(`${name} 문서에서 실무자가 가장 자주 묻는 질문 5개를 뽑아줘.`);
+  }
+
+  return [...questions].slice(0, 16);
 }
 
 

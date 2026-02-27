@@ -321,7 +321,7 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
 
     const out: string[] = [];
     
-        // 헤더 라인에 본문이 같이 붙은 경우: "■ 시행일: 2025-01-01"
+    // 헤더 라인에 본문이 같이 붙은 경우: "■ 시행일: 2025-01-01"
     const head = ps[idx] ?? "";
     const inline = head
       .replace(/^[-•◦▪■◆▶▷◊\s]*/g, "")
