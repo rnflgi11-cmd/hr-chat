@@ -34,6 +34,11 @@ function classifyQuestion(q: string): QuestionKind {
   return "unknown";
 }
 
+function isProcedureQuestion(q: string): boolean {
+  const s = normalizeText(q);
+  return /(신청|절차|어떻게|방법|경로|결재|요청|어디서|어디로)/.test(s);
+}
+
 /** ===== 텍스트 유틸 ===== */
 function normalizeText(s: string): string {
   return (s ?? "")
@@ -72,6 +77,9 @@ function normalizeEventKeywords(q: string): string[] {
   const keys: string[] = [];
 
   if (/경조/.test(s)) keys.push("경조");
+  if (/화환/.test(s)) keys.push("화환");
+  if (/발주/.test(s)) keys.push("발주");
+  if (/배송|도착/.test(s)) keys.push("배송");
   if (/부고|조의|조문|사망|돌아가|별세|상(을)?\s*당/.test(s)) keys.push("사망");
 
   if (/외할머니|외조모/.test(s)) keys.push("외조모");
@@ -379,6 +387,41 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
   return lines.join("\n");
 }
 
+function buildProcedureAnswer(question: string, blocks: Evidence[]): string | null {
+  if (!isProcedureQuestion(question)) return null;
+
+  const qTokens = tokenizeKo(question);
+  const lines = (blocks ?? [])
+    .filter((b) => b.block_type === "p")
+    .map((b) => normalizeText(b.content_text ?? ""))
+    .filter(Boolean);
+
+  if (!lines.length) return null;
+
+  const scored = lines.map((line, idx) => {
+    const c = compact(line);
+    let score = /(신청|절차|방법|경로|결재|요청|제출)/.test(line) ? 8 : 0;
+    for (const t of qTokens) {
+      const tc = compact(t);
+      if (tc && c.includes(tc)) score += 4;
+    }
+    return { idx, line, score };
+  });
+
+  const best = scored.reduce((acc, cur) => (cur.score > acc.score ? cur : acc), scored[0]);
+  if (!best || best.score < 8) return null;
+
+  const start = Math.max(0, best.idx - 2);
+  const slice = lines.slice(start, start + 8);
+  const picked = slice
+    .filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|시스템|포털)/.test(line))
+    .slice(0, 6);
+
+  const body = (picked.length ? picked : slice).map((x) => `- ${x.replace(/^•\s*/g, "")}`);
+
+  return ["## 신청 절차", ...body].join("\n");
+}
+
 /** ===== 마크다운 표 생성 ===== */
 function escapePipe(s: string): string {
   return normalizeText(s).replace(/\|/g, "\\|");
@@ -398,6 +441,8 @@ function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: Ques
   const explicitFull = /(원문|전체|전부|모두|다\s*보여|표\s*전체|섹션)/.test(q);
   const intentLikeQuestion = qType === "list" || qType === "criteria";
   if (!explicitFull && !intentLikeQuestion) return null;
+  const wantsProcedure = isProcedureQuestion(q);
+  const wantsTable = /(일수|기간|금액|수당|얼마|표|지급|유효기간|기준)/.test(q);
 
   const qTokens = tokenizeKo(question);
   const normKeys = normalizeEventKeywords(question);
@@ -437,7 +482,7 @@ function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: Ques
 
   const out: string[] = [];
 
-  if (tables.length) {
+  if (tables.length && (!wantsProcedure || explicitFull || wantsTable)) {
     const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}
 ${t.tableMd}`);
     out.push("## 관련 원문(표)", ...pickedTables);
@@ -514,6 +559,11 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
   if (qType === "criteria") {
     const sectioned = buildSectionedCriteriaAnswer(blocks);
     if (sectioned) return { ok: true, type: "criteria", answer_md: sectioned };
+  }
+
+    if (qType === "criteria") {
+    const procedure = buildProcedureAnswer(question, blocks);
+    if (procedure) return { ok: true, type: "criteria", answer_md: procedure };
   }
 
   const tableBlocks = (blocks ?? []).filter(

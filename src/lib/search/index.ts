@@ -90,6 +90,35 @@ function formatAnswerStyle(question: string, answer: string): string {
   return out.join("\n");
 }
 
+function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
+  if (!/화환/.test(question)) return hits;
+
+  const includeRe = /(화환|발주|신청서|도착|배송)/;
+  const excludeRe = /(경조금|조위금|근속\s*2년|근속2년)/;
+
+  const preferred = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeRe.test(hay) && !excludeRe.test(hay);
+  });
+  if (preferred.length) return preferred;
+
+  const includeOnly = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeRe.test(hay);
+  });
+  if (includeOnly.length) return includeOnly;
+
+  const softened = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return !excludeRe.test(hay);
+  });
+
+  return softened.length ? softened : hits;
+}
+
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
@@ -147,6 +176,8 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     if (filtered.length) hits = filtered;
   }
 
+  hits = applyWreathSafetyFilter(question, hits);
+  
   const scoreRow = makeScorer({ q: question, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
   if (!bestDocId) {

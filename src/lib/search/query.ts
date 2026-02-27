@@ -77,6 +77,14 @@ export function expandQueryTerms(q: string, terms: string[]): string[] {
     out.add("정산");
   }
 
+    if (noSpace.includes("화환")) {
+    out.add("화환 신청");
+    out.add("화환신청서");
+    out.add("발주");
+    out.add("도착");
+    out.add("배송");
+  }
+  
   // ✅ terms 중 "OO휴가" 형태도 띄어쓰기 버전 추가 (예: 경조휴가, 기타휴가)
   for (const t of terms ?? []) {
     const tt = (t ?? "").trim();
