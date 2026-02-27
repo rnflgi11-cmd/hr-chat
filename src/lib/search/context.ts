@@ -76,6 +76,40 @@ function isProbablyTableHtml(html: string) {
   return s.includes("<table") || s.includes("<tr") || s.includes("<td") || s.includes("<th");
 }
 
+
+function markdownTableToHtml(md: string): string | null {
+  const lines = (md || "")
+    .split(/\n+/)
+    .map((x) => x.trim())
+    .filter((x) => x.includes("|"));
+
+  if (lines.length < 2) return null;
+
+  const splitRow = (line: string) =>
+    line
+      .replace(/^\||\|$/g, "")
+      .split("|")
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+  const header = splitRow(lines[0]);
+  const sep = lines[1].replace(/\s+/g, "");
+  if (!header.length || !/^\|?[:\-\|]+\|?$/.test(sep)) return null;
+
+  const bodyRows = lines.slice(2).map(splitRow).filter((r) => r.length > 0);
+  if (!bodyRows.length) return null;
+
+  const esc = (t: string) =>
+    t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const th = header.map((c) => `<th>${esc(c)}</th>`).join("");
+  const trs = bodyRows
+    .map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`)
+    .join("");
+
+  return `<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+}
+
 /**
  * documents 테이블에서 filename/open_url 로드
  * - 테이블/컬럼명이 다를 수 있어 최대한 관용적으로 처리
@@ -243,11 +277,14 @@ export function toEvidence(filename: string, ctx: ContextBlock[]): SearchEvidenc
     const looksTable = bt.includes("table") || (html && isProbablyTableHtml(html));
 
     if (looksTable) {
+      const textCandidate = normalizeText((b?.content_text ?? "").toString());
+      const htmlFromMd = !html && textCandidate ? markdownTableToHtml(textCandidate) : null;
+      const finalHtml = html || htmlFromMd || null;
       out.push({
         filename: b.filename || filename,
         block_type: "table_html",
-        content_html: html || null,
-        table_ok: !!html, // html 없으면 false
+        content_html: finalHtml,
+        table_ok: !!finalHtml,
       });
       continue;
     }

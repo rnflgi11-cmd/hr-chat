@@ -411,7 +411,15 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
   if (!lines.length) return null;
 
   if (isCompactDoc(lines)) {
-    const all = lines.map((x) => `- ${x.replace(/^•\s*/g, "")}`);
+    const all: string[] = [];
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const cleaned = `- ${line.replace(/^•\s*/g, "")}`;
+      const key = cleaned.replace(/\s+/g, " ").trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      all.push(cleaned);
+    }
     return ["## 신청 절차", ...all].join("\n");
   }
 
@@ -434,7 +442,15 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
     .filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|시스템|포털)/.test(line))
     .slice(0, 6);
 
-  const body = (picked.length ? picked : slice).map((x) => `- ${x.replace(/^•\s*/g, "")}`);
+  const bodyRaw = (picked.length ? picked : slice).map((x) => `- ${x.replace(/^•\s*/g, "")}`);
+  const body: string[] = [];
+  const seenBody = new Set<string>();
+  for (const line of bodyRaw) {
+    const key = line.replace(/\s+/g, " ").trim();
+    if (!key || seenBody.has(key)) continue;
+    seenBody.add(key);
+    body.push(line);
+  }
 
   return ["## 신청 절차", ...body].join("\n");
 }
@@ -628,12 +644,12 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
     if (!best) continue;
 
     if (qType === "days") {
-            const isGenericLeaveDays = /(경조|휴가)/.test(normalizeText(question)) && !hasSpecificLeaveEvent(question);
+      const isGenericLeaveDays = /(경조|휴가)/.test(normalizeText(question)) && !hasSpecificLeaveEvent(question);
       if (isGenericLeaveDays) {
         const mdList = buildListAnswer(colMap, body);
         if (mdList !== FALLBACK) return { ok: true, type: "list", answer_md: mdList, used: { filename: (b as any).filename } };
       }
-      
+
       const md = buildDaysAnswer(colMap, best.row);
       if (md !== FALLBACK) return { ok: true, type: "days", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
       continue;
