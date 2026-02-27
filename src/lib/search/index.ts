@@ -119,6 +119,26 @@ ${h.table_html ?? ""}`;
   return softened.length ? softened : hits;
 }
 
+function applyLeaveDaysSafetyFilter(question: string, hits: Row[]): Row[] {
+  if (!/(며칠|몇\s*일|일수|기간)/.test(question)) return hits;
+  if (!/(경조|경조\s*휴가|휴가)/.test(question)) return hits;
+
+  const withDays = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return /(\d+\s*일|휴가일수|일수|근속\s*2년|근속2년)/.test(hay);
+  });
+  if (withDays.length) return withDays;
+
+  const withoutCautionOnly = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return !/(유의사항|사전\s*휴가\s*신청\s*사유|사후\s*휴가\s*신청\s*사유)/.test(hay);
+  });
+
+  return withoutCautionOnly.length ? withoutCautionOnly : hits;
+}
+
 /** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
@@ -177,7 +197,8 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   }
 
   hits = applyWreathSafetyFilter(question, hits);
-  
+  hits = applyLeaveDaysSafetyFilter(question, hits);
+
   const scoreRow = makeScorer({ q: question, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
   if (!bestDocId) {

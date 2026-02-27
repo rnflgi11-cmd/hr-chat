@@ -29,6 +29,7 @@ const FALLBACK =
 function classifyQuestion(q: string): QuestionKind {
   const s = normalizeText(q);
   if (/(종류|목록|리스트|항목|구분|전체|뭐가|뭐야|어떤)/.test(s) && /휴가/.test(s)) return "list";
+  if (/경조\s*휴가/.test(s) && /(알려|정리|안내|뭐야|무엇)/.test(s)) return "list";
   if (/(기준|조건|대상|첨부|서류|신청|비고|정의|절차|방법|시행일)/.test(s)) return "criteria";
   if (/(며칠|몇\s*일|일수|기간)/.test(s)) return "days";
   return "unknown";
@@ -387,6 +388,12 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
   return lines.join("\n");
 }
 
+function isCompactDoc(lines: string[]): boolean {
+  if (lines.length <= 10) return true;
+  const chars = lines.join(" ").length;
+  return chars > 0 && chars <= 900;
+}
+
 function buildProcedureAnswer(question: string, blocks: Evidence[]): string | null {
   if (!isProcedureQuestion(question)) return null;
 
@@ -397,6 +404,11 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
     .filter(Boolean);
 
   if (!lines.length) return null;
+
+  if (isCompactDoc(lines)) {
+    const all = lines.map((x) => `- ${x.replace(/^•\s*/g, "")}`);
+    return ["## 신청 절차", ...all].join("\n");
+  }
 
   const scored = lines.map((line, idx) => {
     const c = compact(line);
