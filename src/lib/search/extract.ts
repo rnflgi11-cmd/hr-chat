@@ -111,6 +111,81 @@ function hasSpecificLeaveEvent(q: string): boolean {
   return /(부모|부친|모친|아버지|어머니|배우자|자녀|형제|자매|조부|조모|외조부|외조모|본인|결혼|출산|사망|부고|조의|조문)/.test(s);
 }
 
+
+function isCondolenceLeaveDaysQuestion(q: string): boolean {
+  const s = normalizeText(q);
+  return /(경조\s*휴가|경조휴가|경조)/.test(s) && /(며칠|몇\s*일|일수|기간)/.test(s);
+}
+
+function dedupeTextLines(lines: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const key = normalizeText(line);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+function buildCondolenceDaysAnswerFromTables(question: string, blocks: Evidence[]): string | null {
+  if (!isCondolenceLeaveDaysQuestion(question)) return null;
+
+  const qTokens = tokenizeKo(question);
+  const normKeys = normalizeEventKeywords(question);
+
+  const candidates: Array<{ score: number; lines: string[] }> = [];
+
+  for (const b of blocks ?? []) {
+    if (b.block_type !== "table_html" || !/<table[\s>]/i.test(b.content_html ?? "")) continue;
+
+    let grid: string[][] = [];
+    try {
+      grid = tableHtmlToGrid(b.content_html ?? "");
+    } catch {
+      continue;
+    }
+    if (!grid.length) continue;
+
+    const headerInfo = findHeaderRow(grid);
+    if (!headerInfo) continue;
+
+    const header = headerInfo.header;
+    const colMap = buildColMap(header);
+    const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+    if (!body.length) continue;
+
+    const rows = body
+      .map((r) => {
+        const obj = rowToObj(header, r);
+        const type = normalizeText(r[colMap.type ?? -1] ?? "") || obj["유형"] || "";
+        const content = normalizeText(r[colMap.content ?? -1] ?? "") || obj["내용"] || obj["대상"] || "";
+        const daysRaw = normalizeText(r[colMap.days ?? -1] ?? "") || obj["휴가일수"] || obj["일수"] || "";
+        const days = extractDaysValue(daysRaw) ?? daysRaw;
+        if (!days) return null;
+
+        const rowText = [type, content, days].filter(Boolean).join(" ");
+        const rowScore = scoreRow(qTokens, normKeys, rowText);
+        return { rowScore, line: `- ${[type, content].filter(Boolean).join(" · ")} — ${days}` };
+      })
+      .filter((x): x is { rowScore: number; line: string } => !!x)
+      .sort((a, b) => b.rowScore - a.rowScore)
+      .slice(0, 12);
+
+    if (!rows.length) continue;
+
+    const lines = dedupeTextLines(rows.map((x) => x.line));
+    const score = rows.reduce((sum, x) => sum + x.rowScore, 0);
+    candidates.push({ score, lines });
+  }
+
+  if (!candidates.length) return null;
+
+  const best = candidates.sort((a, b) => b.score - a.score)[0];
+  return best.lines.length ? best.lines.join("\n") : null;
+}
+
 function decodeHtmlEntities(s: string): string {
   return (s ?? "")
     .replace(/&nbsp;/gi, " ")
@@ -354,9 +429,11 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
     return out;
   };
 
-  const 시행일 = pickSection(/시행일/);
-  const 대상 = pickSection(/대상/);
-  const 사용절차 = pickSection(/사용\s*절차|사용절차/).filter((x) => /①|②|③|④|⑤|\d+\)|\d+\./.test(x));
+  const 시행일 = dedupeTextLines(pickSection(/시행일/));
+  const 대상 = dedupeTextLines(pickSection(/대상/));
+  const 사용절차 = dedupeTextLines(
+    pickSection(/사용\s*절차|사용절차/).filter((x) => /①|②|③|④|⑤|\d+\)|\d+\./.test(x))
+  );
 
   let 기준표 = "";
   if (table && (table as any).content_html) {
@@ -597,13 +674,18 @@ function buildCriteriaRowAnswer(colMap: Record<string, number>, row: string[], r
 export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): ExtractResult {
   const qType = classifyQuestion(question);
 
+    const condolenceDays = buildCondolenceDaysAnswerFromTables(question, blocks);
+  if (condolenceDays) {
+    return { ok: true, type: "days", answer_md: condolenceDays };
+  }
+
   // 섹션형 문서 우선
   if (qType === "criteria") {
     const sectioned = buildSectionedCriteriaAnswer(blocks);
     if (sectioned) return { ok: true, type: "criteria", answer_md: sectioned };
   }
 
-    if (qType === "criteria") {
+      if (qType === "criteria") {
     const procedure = buildProcedureAnswer(question, blocks);
     if (procedure) return { ok: true, type: "criteria", answer_md: procedure };
   }
