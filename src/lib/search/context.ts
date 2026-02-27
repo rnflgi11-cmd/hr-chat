@@ -132,14 +132,14 @@ export async function buildWindowContext({
             : 0,
     }))
     .sort((a, b) => b.s - a.s)
-    .slice(0, 6);
+    .slice(0, 10);
 
   const anchors = scored.map((x) => x.idx);
 
   // window: anchor ±2
   const want = new Set<number>();
   for (const a of anchors) {
-    for (let k = -2; k <= 2; k++) want.add(a + k);
+    for (let k = -6; k <= 6; k++) want.add(a + k);
   }
 
   const chunkIdxs = Array.from(want)
