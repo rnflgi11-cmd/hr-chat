@@ -77,6 +77,21 @@ function isProbablyTableHtml(html: string) {
 }
 
 
+
+function isProbablyMarkdownTable(text: string): boolean {
+  const lines = (text || "")
+    .split(/\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) return false;
+  const hasPipeRows = lines.filter((line) => line.includes("|")).length >= 2;
+  if (!hasPipeRows) return false;
+
+  const sep = lines.find((line) => /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/.test(line));
+  return !!sep;
+}
+
 function markdownTableToHtml(md: string): string | null {
   const lines = (md || "")
     .split(/\n+/)
@@ -274,12 +289,14 @@ export function toEvidence(filename: string, ctx: ContextBlock[]): SearchEvidenc
     const bt = (b?.block_type ?? "").toString().toLowerCase();
 
     const html = (b?.content_html ?? "").toString().trim();
-    const looksTable = bt.includes("table") || (html && isProbablyTableHtml(html));
+    const textCandidate = normalizeText((b?.content_text ?? "").toString());
+    const htmlFromMd = !html && textCandidate ? markdownTableToHtml(textCandidate) : null;
+    const looksMarkdownTable = !html && isProbablyMarkdownTable(textCandidate);
+    const looksTable = bt.includes("table") || (html && isProbablyTableHtml(html)) || looksMarkdownTable || !!htmlFromMd;
 
     if (looksTable) {
-      const textCandidate = normalizeText((b?.content_text ?? "").toString());
-      const htmlFromMd = !html && textCandidate ? markdownTableToHtml(textCandidate) : null;
       const finalHtml = html || htmlFromMd || null;
+
       out.push({
         filename: b.filename || filename,
         block_type: "table_html",
