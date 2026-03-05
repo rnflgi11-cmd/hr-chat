@@ -209,6 +209,42 @@ ${h.table_html ?? ""}`;
   return coreOnly.length ? coreOnly : hits;
 }
 
+function applyEtcLeaveStrictFilter(question: string, hits: Row[]): Row[] {
+  const q = question.replace(/\s+/g, " ").trim();
+
+  // "기타휴가" 또는 기타휴가 대표 키워드가 있는 경우
+  const isEtc =
+    /기타\s*휴가|기타휴가/.test(q) ||
+    /(예비군|민방위|병역의무|직무\s*교육|교육\s*참석|병가)/.test(q);
+
+  if (!isEtc) return hits;
+
+  const includeEtc = /(기타|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|훈련\s*증명서|연차\s*차감\s*없음|사전\s*기안)/;
+  const excludeCondolence = /(경조|결혼|조사|사망|부고|조의|조문|출산|조위금|경조금)/;
+
+  // 기타휴가 관련 내용 + 경조 노이즈 제외
+  const strict = hits.filter((h) => {
+    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
+    return includeEtc.test(hay) && !excludeCondolence.test(hay);
+  });
+  if (strict.length) return strict;
+
+  // 그래도 없으면: 기타 키워드만 포함된 블록 우선
+  const etcOnly = hits.filter((h) => {
+    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
+    return includeEtc.test(hay);
+  });
+  if (etcOnly.length) return etcOnly;
+
+  // 마지막으로: 경조 노이즈만이라도 빼기
+  const softened = hits.filter((h) => {
+    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
+    return !excludeCondolence.test(hay);
+  });
+  return softened.length ? softened : hits;
+}
+
+
 function applyLeaveDaysSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/(며칠|몇\s*일|일수|기간)/.test(question)) return hits;
   if (!/(경조|경조\s*휴가|휴가)/.test(question)) return hits;
@@ -337,14 +373,18 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   if (!hits.length) hits = rawHits;
 
   if (/휴가/.test(intent)) {
+    // ✅ table 블록(text=null)도 포함되도록 text + table_html 모두 검사
     const filtered = hits
-      .filter((h: Row) => /휴가|연차|경조/.test(h.text ?? ""))
-      .filter((h: Row) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(h.text ?? ""));
+      .filter((h: Row) => /휴가|연차|경조/.test(`${h.text ?? ""}
+${h.table_html ?? ""}`))
+      .filter((h: Row) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(`${h.text ?? ""}
+${h.table_html ?? ""}`));
     if (filtered.length) hits = filtered;
   }
 
   hits = applyWreathSafetyFilter(question, hits);
   hits = applyCondolenceLeaveStrictFilter(question, hits);
+  hits = applyEtcLeaveStrictFilter(question, hits);
   hits = applyLeaveDaysSafetyFilter(question, hits);
 
   const scoreRow = makeScorer({ q: question, used, anchors });

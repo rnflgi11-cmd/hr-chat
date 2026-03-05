@@ -25,21 +25,6 @@ export type ExtractResult = {
 const FALLBACK =
   "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀으로 문의해 주시기 바랍니다.";
 
-/** ===== 질문 타입 3종(힌트용) ===== */
-function classifyQuestion(q: string): QuestionKind {
-  const s = normalizeText(q);
-  if (/(종류|목록|리스트|항목|구분|전체|뭐가|뭐야|어떤)/.test(s) && /휴가/.test(s)) return "list";
-  if (/경조\s*휴가/.test(s) && /(알려|정리|안내|뭐야|무엇)/.test(s)) return "list";
-  if (/(기준|조건|대상|첨부|서류|신청|비고|정의|절차|방법|시행일)/.test(s)) return "criteria";
-  if (/(며칠|몇\s*일|일수|기간)/.test(s)) return "days";
-  return "unknown";
-}
-
-function isProcedureQuestion(q: string): boolean {
-  const s = normalizeText(q);
-  return /(신청|절차|어떻게|방법|경로|결재|요청|어디서|어디로)/.test(s);
-}
-
 /** ===== 텍스트 유틸 ===== */
 function normalizeText(s: string): string {
   return (s ?? "")
@@ -55,14 +40,50 @@ function compact(s: string): string {
 }
 
 const KOREAN_STOP = new Set([
-  "은","는","이","가","을","를","에","에서","로","으로","과","와","및","또는","혹은",
-  "좀","몇","며칠","일","수","알려줘","알려","궁금","해줘","나요","인가","어떻게",
-  "기준","종류","목록","해당","관련","내용","규정","휴가",
+  "은",
+  "는",
+  "이",
+  "가",
+  "을",
+  "를",
+  "에",
+  "에서",
+  "로",
+  "으로",
+  "과",
+  "와",
+  "및",
+  "또는",
+  "혹은",
+  "좀",
+  "몇",
+  "며칠",
+  "일",
+  "수",
+  "알려줘",
+  "알려",
+  "궁금",
+  "해줘",
+  "나요",
+  "인가",
+  "어떻게",
+  "기준",
+  "종류",
+  "목록",
+  "해당",
+  "관련",
+  "내용",
+  "규정",
+  "휴가",
 ]);
 
 function tokenizeKo(q: string): string[] {
   const base = normalizeText(q);
-  const rough = base.split(/[\s/]+/).map((x) => x.trim()).filter(Boolean);
+  const rough = base
+    .split(/[\s/]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
   const out: string[] = [];
   for (const t of rough) {
     const tt = t.replace(/[^\p{L}\p{N}]+/gu, "").trim().toLowerCase();
@@ -71,6 +92,97 @@ function tokenizeKo(q: string): string[] {
     out.push(tt);
   }
   return Array.from(new Set(out));
+}
+
+/** ===== 질문 타입 3종(힌트용) ===== */
+function classifyQuestion(q: string): QuestionKind {
+  const s = normalizeText(q);
+
+  // ✅ list는 “휴가” 전체가 아니라 “기타휴가/경조휴가” 같이 명시적으로 말할 때만 강하게 list로 유도
+  if (
+    /(기타\s*휴가|기타휴가|경조\s*휴가|경조휴가)/.test(s) &&
+    /(종류|목록|리스트|항목|구분|전체|어떤|뭐가|뭐야)/.test(s)
+  ) {
+    return "list";
+  }
+
+  // 경조휴가를 “정리/안내”처럼 묻는 경우는 list로
+  if (/경조\s*휴가/.test(s) && /(알려|정리|안내|뭐야|무엇)/.test(s)) return "list";
+
+  if (/(기준|조건|대상|첨부|서류|신청|비고|정의|절차|방법|시행일)/.test(s)) return "criteria";
+  if (/(며칠|몇\s*일|일수|기간)/.test(s)) return "days";
+  return "unknown";
+}
+
+function isProcedureQuestion(q: string): boolean {
+  const s = normalizeText(q);
+  return /(신청|절차|어떻게|방법|경로|결재|요청|어디서|어디로)/.test(s);
+}
+
+function decodeHtmlEntities(s: string): string {
+  return (s ?? "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function stripTags(html: string): string {
+  const br = (html ?? "").replace(/<br\s*\/?>/gi, " ");
+  const no = br.replace(/<[^>]+>/g, " ");
+  return decodeHtmlEntities(no);
+}
+
+/**
+ * ✅ table_html 점수: “표 선택” 안정화를 위한 함수
+ * - 기타휴가 질문이면: 민방위/예비군/직무교육/병가 표가 위로 오도록
+ * - 경조휴가 질문이면: 결혼/조사/출산/사망 표가 위로 오도록
+ * - 태그 기반(html)만 보면 매칭이 약해질 수 있어 stripTags를 같이 사용
+ */
+function scoreTableHtmlForQuestion(html: string, question: string): number {
+  const q = normalizeText(question);
+
+  const sText = normalizeText(stripTags(html)); // ✅ 표 내부 텍스트 기반
+  const sRaw = normalizeText(html); // 혹시 텍스트가 raw에만 남는 케이스 대비
+
+  const wantEtc = /기타\s*휴가|기타휴가/.test(q);
+  const wantCondol = /경조\s*휴가|경조휴가|경조/.test(q);
+
+  const contains = (t: string) => {
+    const tt = normalizeText(t);
+    if (!tt) return false;
+    return sText.includes(tt) || sRaw.includes(tt);
+  };
+
+  let score = 0;
+
+  if (wantEtc) {
+    const good = ["병역", "민방위", "예비군", "훈련", "직무", "교육", "병가", "연차 차감 없음"];
+    for (const t of good) if (contains(t)) score += 10;
+
+    // ✅ 기타휴가 질문에서 경조/화환/조사/출산 표가 먼저 잡히는 걸 강하게 차단
+    const bad = ["경조", "결혼", "출산", "조사", "사망", "조문", "화환"];
+    for (const t of bad) if (contains(t)) score -= 12;
+  }
+
+  if (wantCondol) {
+    const good = ["경조", "결혼", "출산", "조사", "사망"];
+    for (const t of good) if (contains(t)) score += 10;
+
+    const bad = ["민방위", "예비군", "직무", "교육", "병가"];
+    for (const t of bad) if (contains(t)) score -= 8;
+  }
+
+  // 보너스: 질문 토큰도 약하게 가점
+  for (const w of tokenizeKo(question).slice(0, 8)) {
+    if (contains(w)) score += 2;
+  }
+
+  return score;
 }
 
 function normalizeEventKeywords(q: string): string[] {
@@ -106,149 +218,6 @@ function normalizeEventKeywords(q: string): string[] {
 }
 
 /** ===== HTML table 파서 (cheerio 없이) ===== */
-function hasSpecificLeaveEvent(q: string): boolean {
-  const s = normalizeText(q);
-  return /(부모|부친|모친|아버지|어머니|배우자|자녀|형제|자매|조부|조모|외조부|외조모|본인|결혼|출산|사망|부고|조의|조문)/.test(s);
-}
-
-
-function isCondolenceLeaveDaysQuestion(q: string): boolean {
-  const s = normalizeText(q);
-  return /(경조\s*휴가|경조휴가|경조)/.test(s) && /(며칠|몇\s*일|일수|기간)/.test(s);
-}
-
-function dedupeTextLines(lines: string[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const line of lines) {
-    const key = normalizeText(line);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(line);
-  }
-  return out;
-}
-
-function canonicalLine(line: string): string {
-  return normalizeText(line)
-    .replace(/^[-•◦▪■◆▶▷◊]+\s*/u, "")
-    .replace(/^\d+[\.)]\s*/u, "")
-    .replace(/[\s:：]+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function dedupeStableLines(lines: string[]): string[] {
-  const out: string[] = [];
-  const seenCanonicals: string[] = [];
-
-  for (const line of lines) {
-    const canonical = canonicalLine(line);
-    if (!canonical) continue;
-
-    const isNearDuplicate = seenCanonicals.some((k) => {
-      if (k === canonical) return true;
-      if (canonical.length < 8 || k.length < 8) return false;
-      return k.includes(canonical) || canonical.includes(k);
-    });
-
-    if (isNearDuplicate) continue;
-    seenCanonicals.push(canonical);
-    out.push(line);
-  }
-
-  return out;
-}
-
-function isSectionHeadingLine(line: string): boolean {
-  const raw = normalizeText(line)
-    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
-    .replace(/^\d+[\.)]\s*/u, "");
-
-  return /^(시행일|대상|기준|사용\s*절차|사용절차)(\s*[:：-].*)?$/u.test(raw);
-}
-
-function normalizeSectionBodyLine(line: string): string {
-  return normalizeText(line)
-    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
-    .replace(/^\d+[\.)]\s*/u, "")
-    .trim();
-}
-
-function buildCondolenceDaysAnswerFromTables(question: string, blocks: Evidence[]): string | null {
-  if (!isCondolenceLeaveDaysQuestion(question)) return null;
-
-  const qTokens = tokenizeKo(question);
-  const normKeys = normalizeEventKeywords(question);
-
-  const candidates: Array<{ score: number; lines: string[] }> = [];
-
-  for (const b of blocks ?? []) {
-    if (b.block_type !== "table_html" || !/<table[\s>]/i.test(b.content_html ?? "")) continue;
-
-    let grid: string[][] = [];
-    try {
-      grid = tableHtmlToGrid(b.content_html ?? "");
-    } catch {
-      continue;
-    }
-    if (!grid.length) continue;
-
-    const headerInfo = findHeaderRow(grid);
-    if (!headerInfo) continue;
-
-    const header = headerInfo.header;
-    const colMap = buildColMap(header);
-    const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
-    if (!body.length) continue;
-
-    const rows = body
-      .map((r) => {
-        const obj = rowToObj(header, r);
-        const type = normalizeText(r[colMap.type ?? -1] ?? "") || obj["유형"] || "";
-        const content = normalizeText(r[colMap.content ?? -1] ?? "") || obj["내용"] || obj["대상"] || "";
-        const daysRaw = normalizeText(r[colMap.days ?? -1] ?? "") || obj["휴가일수"] || obj["일수"] || "";
-        const days = extractDaysValue(daysRaw) ?? daysRaw;
-        if (!days) return null;
-
-        const rowText = [type, content, days].filter(Boolean).join(" ");
-        const rowScore = scoreRow(qTokens, normKeys, rowText);
-        return { rowScore, line: `- ${[type, content].filter(Boolean).join(" · ")} — ${days}` };
-      })
-      .filter((x): x is { rowScore: number; line: string } => !!x)
-      .sort((a, b) => b.rowScore - a.rowScore)
-      .slice(0, 12);
-
-    if (!rows.length) continue;
-
-    const lines = dedupeTextLines(rows.map((x) => x.line));
-    const score = rows.reduce((sum, x) => sum + x.rowScore, 0);
-    candidates.push({ score, lines });
-  }
-
-  if (!candidates.length) return null;
-
-  const best = candidates.sort((a, b) => b.score - a.score)[0];
-  return best.lines.length ? best.lines.join("\n") : null;
-}
-
-function decodeHtmlEntities(s: string): string {
-  return (s ?? "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x27;/gi, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function stripTags(html: string): string {
-  const br = (html ?? "").replace(/<br\s*\/?>/gi, " ");
-  const no = br.replace(/<[^>]+>/g, " ");
-  return decodeHtmlEntities(no);
-}
 function getAttrInt(attrs: string, name: string, def = 1): number {
   const m = attrs.match(new RegExp(`${name}\\s*=\\s*["']?(\\d+)["']?`, "i"));
   const v = m ? parseInt(m[1], 10) : def;
@@ -332,7 +301,21 @@ function tableHtmlToGrid(tableHtml: string): string[][] {
 
 /** ===== 표 헤더/컬럼 ===== */
 function findHeaderRow(grid: string[][]): { header: string[]; headerRowIndex: number } | null {
-  const hints = ["구분","유형","내용","경조유형","휴가일수","일수","기간","첨부서류","서류","비고","기준","대상","유효기간"];
+  const hints = [
+    "구분",
+    "유형",
+    "내용",
+    "경조유형",
+    "휴가일수",
+    "일수",
+    "기간",
+    "첨부서류",
+    "서류",
+    "비고",
+    "기준",
+    "대상",
+    "유효기간",
+  ];
   let bestIdx = -1;
   let bestScore = 0;
 
@@ -343,7 +326,10 @@ function findHeaderRow(grid: string[][]): { header: string[]; headerRowIndex: nu
     for (const h of hints) if (joined.includes(compact(h))) score += 2;
     const shortCells = row.filter((x) => normalizeText(x).length > 0 && normalizeText(x).length <= 6).length;
     score += Math.min(3, shortCells);
-    if (score > bestScore) { bestScore = score; bestIdx = i; }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
   }
 
   if (bestIdx < 0 || bestScore < 3) return null;
@@ -356,7 +342,10 @@ function buildColMap(header: string[]): Record<string, number> {
     if (key in map) return;
     for (let i = 0; i < header.length; i++) {
       const h = header[i] || "";
-      if (patterns.some((re) => re.test(h))) { map[key] = i; return; }
+      if (patterns.some((re) => re.test(h))) {
+        map[key] = i;
+        return;
+      }
     }
   };
 
@@ -384,7 +373,10 @@ function rowToObj(header: string[], row: string[]): Record<string, string> {
 }
 
 function stringifyRow(obj: Record<string, string>): string {
-  return Object.values(obj).map((v) => normalizeText(v)).filter(Boolean).join(" ");
+  return Object.values(obj)
+    .map((v) => normalizeText(v))
+    .filter(Boolean)
+    .join(" ");
 }
 
 function extractDaysValue(s: string): string | null {
@@ -398,6 +390,77 @@ function extractDaysValue(s: string): string | null {
   return null;
 }
 
+/** ===== 경조/이벤트 키 ===== */
+function hasSpecificLeaveEvent(q: string): boolean {
+  const s = normalizeText(q);
+  return /(부모|부친|모친|아버지|어머니|배우자|자녀|형제|자매|조부|조모|외조부|외조모|본인|결혼|출산|사망|부고|조의|조문)/.test(s);
+}
+
+function isCondolenceLeaveDaysQuestion(q: string): boolean {
+  const s = normalizeText(q);
+  return /(경조\s*휴가|경조휴가|경조)/.test(s) && /(며칠|몇\s*일|일수|기간)/.test(s);
+}
+
+/** ===== 라인 dedupe ===== */
+function dedupeTextLines(lines: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const key = normalizeText(line);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+function canonicalLine(line: string): string {
+  return normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊]+\s*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "")
+    .replace(/[\s:：]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function dedupeStableLines(lines: string[]): string[] {
+  const out: string[] = [];
+  const seenCanonicals: string[] = [];
+
+  for (const line of lines) {
+    const canonical = canonicalLine(line);
+    if (!canonical) continue;
+
+    const isNearDuplicate = seenCanonicals.some((k) => {
+      if (k === canonical) return true;
+      if (canonical.length < 8 || k.length < 8) return false;
+      return k.includes(canonical) || canonical.includes(k);
+    });
+
+    if (isNearDuplicate) continue;
+    seenCanonicals.push(canonical);
+    out.push(line);
+  }
+
+  return out;
+}
+
+function isSectionHeadingLine(line: string): boolean {
+  const raw = normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "");
+
+  return /^(시행일|대상|기준|사용\s*절차|사용절차)(\s*[:：-].*)?$/u.test(raw);
+}
+
+function normalizeSectionBodyLine(line: string): string {
+  return normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "")
+    .trim();
+}
+
+/** ===== score ===== */
 function scoreRow(qTokens: string[], normKeys: string[], rowText: string): number {
   const rt = normalizeText(rowText);
   const rc = compact(rt);
@@ -432,6 +495,64 @@ function pickBestRow(header: string[], bodyRows: string[][], q: string) {
   return best;
 }
 
+/** ===== 경조휴가 “며칠” 특화 (표 기반) ===== */
+function buildCondolenceDaysAnswerFromTables(question: string, blocks: Evidence[]): string | null {
+  if (!isCondolenceLeaveDaysQuestion(question)) return null;
+
+  const qTokens = tokenizeKo(question);
+  const normKeys = normalizeEventKeywords(question);
+
+  const candidates: Array<{ score: number; lines: string[] }> = [];
+
+  for (const b of blocks ?? []) {
+    if (b.block_type !== "table_html" || !/<table[\s>]/i.test(b.content_html ?? "")) continue;
+
+    let grid: string[][] = [];
+    try {
+      grid = tableHtmlToGrid(b.content_html ?? "");
+    } catch {
+      continue;
+    }
+    if (!grid.length) continue;
+
+    const headerInfo = findHeaderRow(grid);
+    if (!headerInfo) continue;
+
+    const header = headerInfo.header;
+    const colMap = buildColMap(header);
+    const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+    if (!body.length) continue;
+
+    const rows = body
+      .map((r) => {
+        const obj = rowToObj(header, r);
+        const type = normalizeText(r[colMap.type ?? -1] ?? "") || obj["유형"] || "";
+        const content = normalizeText(r[colMap.content ?? -1] ?? "") || obj["내용"] || obj["대상"] || "";
+        const daysRaw = normalizeText(r[colMap.days ?? -1] ?? "") || obj["휴가일수"] || obj["일수"] || "";
+        const days = extractDaysValue(daysRaw) ?? daysRaw;
+        if (!days) return null;
+
+        const rowText = [type, content, days].filter(Boolean).join(" ");
+        const rowScore = scoreRow(qTokens, normKeys, rowText);
+        return { rowScore, line: `- ${[type, content].filter(Boolean).join(" · ")} — ${days}` };
+      })
+      .filter((x): x is { rowScore: number; line: string } => !!x)
+      .sort((a, b) => b.rowScore - a.rowScore)
+      .slice(0, 12);
+
+    if (!rows.length) continue;
+
+    const lines = dedupeTextLines(rows.map((x) => x.line));
+    const score = rows.reduce((sum, x) => sum + x.rowScore, 0);
+    candidates.push({ score, lines });
+  }
+
+  if (!candidates.length) return null;
+
+  const best = candidates.sort((a, b) => b.score - a.score)[0];
+  return best.lines.length ? best.lines.join("\n") : null;
+}
+
 /** ===== 섹션형 문서(시행일/대상/절차 등) ===== */
 function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
   const ps = (blocks ?? [])
@@ -439,7 +560,9 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
     .map((b: any) => normalizeText((b as any).content_text ?? ""))
     .filter(Boolean);
 
-  const table = (blocks ?? []).find((b: any) => b.block_type === "table_html" && /<table[\s>]/i.test((b as any).content_html ?? ""));
+  const table = (blocks ?? []).find(
+    (b: any) => b.block_type === "table_html" && /<table[\s>]/i.test((b as any).content_html ?? "")
+  );
   if (!ps.length && !table) return null;
 
   const hasSections =
@@ -455,7 +578,7 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
     if (idx < 0) return [];
 
     const out: string[] = [];
-    
+
     // 헤더 라인에 본문이 같이 붙은 경우: "■ 시행일: 2025-01-01"
     const head = ps[idx] ?? "";
     const inline = head
@@ -476,12 +599,8 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
     return out;
   };
 
-  const 시행일 = dedupeStableLines(
-    pickSection(/시행일/).map(normalizeSectionBodyLine).filter(Boolean)
-  ).slice(0, 4);
-  const 대상 = dedupeStableLines(
-    pickSection(/대상/).map(normalizeSectionBodyLine).filter(Boolean)
-  ).slice(0, 8);
+  const 시행일 = dedupeStableLines(pickSection(/시행일/).map(normalizeSectionBodyLine).filter(Boolean)).slice(0, 4);
+  const 대상 = dedupeStableLines(pickSection(/대상/).map(normalizeSectionBodyLine).filter(Boolean)).slice(0, 8);
   const 사용절차 = dedupeStableLines(
     pickSection(/사용\s*절차|사용절차/)
       .map(normalizeSectionBodyLine)
@@ -495,7 +614,6 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
     if (headerInfo) {
       const header = headerInfo.header;
       const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
-      // Markdown 표
       기준표 = gridToMarkdownTable(header, body);
     }
   }
@@ -541,7 +659,7 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
   if (!lines.length) return null;
 
   if (isCompactDoc(lines)) {
-    const proceduralOnly = lines.filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|시스템|포털)/.test(line));
+    const proceduralOnly = lines.filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|서류|시스템|포털)/.test(line));
     const picked = (proceduralOnly.length ? proceduralOnly : lines)
       .map((line) => `- ${normalizeSectionBodyLine(line)}`)
       .filter((line) => line !== "-");
@@ -565,7 +683,7 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
   const start = Math.max(0, best.idx - 2);
   const slice = lines.slice(start, start + 8);
   const picked = slice
-    .filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|시스템|포털)/.test(line))
+    .filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|서류|시스템|포털)/.test(line))
     .slice(0, 6);
 
   const bodyRaw = (picked.length ? picked : slice).map((x) => `- ${x.replace(/^•\s*/g, "")}`);
@@ -582,83 +700,9 @@ function gridToMarkdownTable(header: string[], rows: string[][]): string {
   const cols = Math.max(1, header.length);
   const h = header.slice(0, cols).map(escapePipe);
   const sep = new Array(cols).fill("---");
-  const body = rows.map((r) =>
-    new Array(cols).fill("").map((_, i) => escapePipe(r[i] ?? "")).join(" | ")
-  );
+  const body = rows.map((r) => new Array(cols).fill("").map((_, i) => escapePipe(r[i] ?? "")).join(" | "));
   return `| ${h.join(" | ")} |\n| ${sep.join(" | ")} |\n${body.map((x) => `| ${x} |`).join("\n")}`;
 }
-
-function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: QuestionKind): string | null {
-  const q = normalizeText(question);
-  const explicitFull = /(원문|전체|전부|모두|다\s*보여|표\s*전체|섹션)/.test(q);
-  const intentLikeQuestion = qType === "list" || qType === "criteria";
-  if (!explicitFull && !intentLikeQuestion) return null;
-  const wantsProcedure = isProcedureQuestion(q);
-  const wantsTable = /(일수|기간|금액|수당|얼마|표|지급|유효기간|기준)/.test(q);
-
-  const qTokens = tokenizeKo(question);
-  const normKeys = normalizeEventKeywords(question);
-
-  const tables = (blocks ?? [])
-    .filter((b) => b.block_type === "table_html" && /<table[\s>]/i.test(b.content_html ?? ""))
-    .map((b) => {
-      const grid = tableHtmlToGrid(b.content_html ?? "");
-      const headerInfo = findHeaderRow(grid);
-      if (!headerInfo) return null;
-      const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
-      if (!body.length) return null;
-
-      const joined = [headerInfo.header.join(" "), ...body.map((r) => r.join(" "))].join(" ");
-      const score = scoreRow(qTokens, normKeys, joined);
-      return {
-        score,
-        tableMd: gridToMarkdownTable(headerInfo.header, body),
-      };
-    })
-    .filter((x): x is { score: number; tableMd: string } => !!x)
-    .sort((a, b) => b.score - a.score);
-
-  const paragraphs = (blocks ?? [])
-    .filter((b) => b.block_type === "p")
-    .map((b, idx) => ({
-      idx,
-      line: normalizeText(b.content_text ?? ""),
-    }))
-    .filter((x) => x.line.length > 0)
-    .map((x) => ({
-      ...x,
-      score: scoreRow(qTokens, normKeys, x.line) + (/유의사항|사전|사후|비고|첨부|서류|신청|절차|기준/.test(x.line) ? 3 : 0),
-    }));
-
-  if (!tables.length && !paragraphs.length) return null;
-
-  const out: string[] = [];
-  const preferTableOnly = qType === "days" || qType === "list";
-  const preferSectionOnly = wantsProcedure && !explicitFull && !wantsTable;
-
-  if (tables.length && !preferSectionOnly) {
-    const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}
-${t.tableMd}`);
-    out.push("## 관련 원문(표)", ...pickedTables);
-  }
-
-  if (paragraphs.length && !preferTableOnly) {
-    const bestIdx = paragraphs.reduce((best, cur, i, arr) => (cur.score > arr[best].score ? i : best), 0);
-    const start = Math.max(0, bestIdx - 3);
-    const sectionLines = paragraphs
-      .slice(start, start + 14)
-      .map((x) => `- ${x.line.replace(/^•\s*/g, "")}`);
-
-    const uniqueSectionLines = dedupeStableLines(sectionLines);
-
-    if (uniqueSectionLines.length) {
-      out.push("## 관련 원문(섹션)", ...uniqueSectionLines);
-    }
-  }
-
-  return out.length ? out.join("\n\n") : null;
-}
-
 
 /** ===== list/days/criteria 출력 ===== */
 function buildListAnswer(colMap: Record<string, number>, bodyRows: string[][]): string {
@@ -686,6 +730,88 @@ function buildDaysAnswer(colMap: Record<string, number>, row: string[]): string 
 
   const ctx = [type, content].filter(Boolean).join(" · ");
   return `**${days}**${ctx ? ` (${ctx})` : ""}${valid ? `\n- 유효기간: ${valid}` : ""}`.trim();
+}
+
+function buildCriteriaRowAnswer(colMap: Record<string, number>, row: string[], rowObj: Record<string, string>): string {
+  const type = normalizeText(row[colMap.type ?? -1] ?? "") || rowObj["유형"] || "";
+  const content = normalizeText(row[colMap.content ?? -1] ?? "") || rowObj["내용"] || rowObj["대상"] || "";
+  const daysRaw = normalizeText(row[colMap.days ?? -1] ?? "") || rowObj["휴가일수"] || rowObj["일수"] || "";
+  const days = extractDaysValue(daysRaw) ?? (daysRaw ? daysRaw : "");
+  const valid = normalizeText(row[colMap.valid ?? -1] ?? "") || rowObj["유효기간"] || "";
+  const docs = normalizeText(row[colMap.docs ?? -1] ?? "") || rowObj["첨부서류"] || rowObj["제출서류"] || "";
+  const note = normalizeText(row[colMap.note ?? -1] ?? "") || rowObj["비고"] || "";
+
+  const lines: string[] = [];
+  if (type) lines.push(`- 유형: ${type}`);
+  if (content) lines.push(`- 내용/대상: ${content}`);
+  if (days) lines.push(`- 기간/일수: ${days}`);
+  if (valid) lines.push(`- 유효기간: ${valid}`);
+  if (docs) lines.push(`- 첨부/제출 서류: ${docs}`);
+  if (note) lines.push(`- 비고: ${note}`);
+  return lines.length ? lines.join("\n") : FALLBACK;
+}
+
+/** ===== 원문 출력(표/섹션) ===== */
+function buildFullSourceAnswer(question: string, blocks: Evidence[], qType: QuestionKind): string | null {
+  const q = normalizeText(question);
+  const explicitFull = /(원문|전체|전부|모두|다\s*보여|표\s*전체|섹션)/.test(q);
+  const intentLikeQuestion = qType === "list" || qType === "criteria";
+  if (!explicitFull && !intentLikeQuestion) return null;
+
+  const wantsProcedure = isProcedureQuestion(q);
+  const wantsTable = /(일수|기간|금액|수당|얼마|표|지급|유효기간|기준)/.test(q);
+
+  const qTokens = tokenizeKo(question);
+  const normKeys = normalizeEventKeywords(question);
+
+  const tables = (blocks ?? [])
+    .filter((b) => b.block_type === "table_html" && /<table[\s>]/i.test(b.content_html ?? ""))
+    .map((b) => {
+      const grid = tableHtmlToGrid(b.content_html ?? "");
+      const headerInfo = findHeaderRow(grid);
+      if (!headerInfo) return null;
+      const body = grid.slice(headerInfo.headerRowIndex + 1).filter((r) => r.some((c) => normalizeText(c)));
+      if (!body.length) return null;
+
+      const joined = [headerInfo.header.join(" "), ...body.map((r) => r.join(" "))].join(" ");
+      const score = scoreRow(qTokens, normKeys, joined);
+      return { score, tableMd: gridToMarkdownTable(headerInfo.header, body) };
+    })
+    .filter((x): x is { score: number; tableMd: string } => !!x)
+    .sort((a, b) => b.score - a.score);
+
+  const paragraphs = (blocks ?? [])
+    .filter((b) => b.block_type === "p")
+    .map((b, idx) => ({ idx, line: normalizeText(b.content_text ?? "") }))
+    .filter((x) => x.line.length > 0)
+    .map((x) => ({
+      ...x,
+      score:
+        scoreRow(qTokens, normKeys, x.line) +
+        (/유의사항|사전|사후|비고|첨부|서류|신청|절차|기준/.test(x.line) ? 3 : 0),
+    }));
+
+  if (!tables.length && !paragraphs.length) return null;
+
+  const out: string[] = [];
+  const preferTableOnly = qType === "days" || qType === "list";
+  const preferSectionOnly = wantsProcedure && !explicitFull && !wantsTable;
+
+  if (tables.length && !preferSectionOnly) {
+    const pickedTables = tables.slice(0, 3).map((t, idx) => `### 표 ${idx + 1}\n${t.tableMd}`);
+    out.push("## 관련 원문(표)", ...pickedTables);
+  }
+
+  if (paragraphs.length && !preferTableOnly) {
+    const bestIdx = paragraphs.reduce((best, cur, i, arr) => (cur.score > arr[best].score ? i : best), 0);
+    const start = Math.max(0, bestIdx - 3);
+    const sectionLines = paragraphs.slice(start, start + 14).map((x) => `- ${x.line.replace(/^•\s*/g, "")}`);
+    const uniqueSectionLines = dedupeStableLines(sectionLines);
+
+    if (uniqueSectionLines.length) out.push("## 관련 원문(섹션)", ...uniqueSectionLines);
+  }
+
+  return out.length ? out.join("\n\n") : null;
 }
 
 function buildCondensedTableAnswer(question: string, blocks: Evidence[], qType: QuestionKind): string | null {
@@ -718,50 +844,24 @@ function buildCondensedTableAnswer(question: string, blocks: Evidence[], qType: 
   const lines = dedupeStableLines(listMd.split("\n").filter(Boolean));
   if (!lines.length) return null;
 
-  if (qType === "list" || qType === "days") {
-    return lines.slice(0, 12).join("\n");
-  }
+  if (qType === "list" || qType === "days") return lines.slice(0, 12).join("\n");
 
-  // criteria 질문은 너무 장문으로 가지 않게 핵심 라인만 고정 출력
   const condensed = lines.slice(0, 8);
   return ["## 관련 기준(요약)", ...condensed].join("\n");
-}
-
-function buildCriteriaRowAnswer(colMap: Record<string, number>, row: string[], rowObj: Record<string, string>): string {
-  const type = normalizeText(row[colMap.type ?? -1] ?? "") || rowObj["유형"] || "";
-  const content = normalizeText(row[colMap.content ?? -1] ?? "") || rowObj["내용"] || rowObj["대상"] || "";
-  const daysRaw = normalizeText(row[colMap.days ?? -1] ?? "") || rowObj["휴가일수"] || rowObj["일수"] || "";
-  const days = extractDaysValue(daysRaw) ?? (daysRaw ? daysRaw : "");
-  const valid = normalizeText(row[colMap.valid ?? -1] ?? "") || rowObj["유효기간"] || "";
-  const docs = normalizeText(row[colMap.docs ?? -1] ?? "") || rowObj["첨부서류"] || rowObj["제출서류"] || "";
-  const note = normalizeText(row[colMap.note ?? -1] ?? "") || rowObj["비고"] || "";
-
-  const lines: string[] = [];
-  if (type) lines.push(`- 유형: ${type}`);
-  if (content) lines.push(`- 내용/대상: ${content}`);
-  if (days) lines.push(`- 기간/일수: ${days}`);
-  if (valid) lines.push(`- 유효기간: ${valid}`);
-  if (docs) lines.push(`- 첨부/제출 서류: ${docs}`);
-  if (note) lines.push(`- 비고: ${note}`);
-  return lines.length ? lines.join("\n") : FALLBACK;
 }
 
 /** ===== exported main ===== */
 export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): ExtractResult {
   const qType = classifyQuestion(question);
 
-    const condolenceDays = buildCondolenceDaysAnswerFromTables(question, blocks);
-  if (condolenceDays) {
-    return { ok: true, type: "days", answer_md: condolenceDays };
-  }
+  const condolenceDays = buildCondolenceDaysAnswerFromTables(question, blocks);
+  if (condolenceDays) return { ok: true, type: "days", answer_md: condolenceDays };
 
-  // 섹션형 문서 우선
+  // ✅ criteria 분기 정리(중복 if 제거) - 동작 유지
   if (qType === "criteria") {
     const sectioned = buildSectionedCriteriaAnswer(blocks);
     if (sectioned) return { ok: true, type: "criteria", answer_md: sectioned };
-  }
 
-      if (qType === "criteria") {
     const procedure = buildProcedureAnswer(question, blocks);
     if (procedure) return { ok: true, type: "criteria", answer_md: procedure };
   }
@@ -769,6 +869,23 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
   const tableBlocks = (blocks ?? []).filter(
     (b: any) => b.block_type === "table_html" && /<table[\s>]/i.test((b as any).content_html ?? "")
   );
+
+  // ✅ list 질문일 때만 표 우선순위 재정렬(안전장치 포함)
+  if (qType === "list" && tableBlocks.length >= 2) {
+    const scored = tableBlocks.map((t: any) => ({
+      t,
+      s: scoreTableHtmlForQuestion((t as any).content_html ?? "", question),
+    }));
+    scored.sort((a, b) => b.s - a.s);
+
+    const top = scored[0]?.s ?? 0;
+    const gap = scored.length >= 2 ? top - scored[1].s : top;
+
+    // top이 너무 낮거나 gap이 작으면 기존 순서 유지
+    if (top >= 6 && gap >= 2) {
+      tableBlocks.splice(0, tableBlocks.length, ...scored.map((x) => x.t));
+    }
+  }
 
   for (const b of tableBlocks) {
     const html = (b as any).content_html ?? "";
@@ -806,13 +923,25 @@ export function extractAnswerFromBlocks(question: string, blocks: Evidence[]): E
       }
 
       const md = buildDaysAnswer(colMap, best.row);
-      if (md !== FALLBACK) return { ok: true, type: "days", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
+      if (md !== FALLBACK)
+        return {
+          ok: true,
+          type: "days",
+          answer_md: md,
+          used: { filename: (b as any).filename, row_text: best.text, row: best.obj },
+        };
       continue;
     }
 
     // criteria (row 기반)
     const md = buildCriteriaRowAnswer(colMap, best.row, best.obj);
-    if (md !== FALLBACK) return { ok: true, type: "criteria", answer_md: md, used: { filename: (b as any).filename, row_text: best.text, row: best.obj } };
+    if (md !== FALLBACK)
+      return {
+        ok: true,
+        type: "criteria",
+        answer_md: md,
+        used: { filename: (b as any).filename, row_text: best.text, row: best.obj },
+      };
   }
 
   const condensedTable = buildCondensedTableAnswer(question, blocks, qType);
