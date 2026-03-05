@@ -160,6 +160,21 @@ function dedupeStableLines(lines: string[]): string[] {
   return out;
 }
 
+function isSectionHeadingLine(line: string): boolean {
+  const raw = normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "");
+
+  return /^(시행일|대상|기준|사용\s*절차|사용절차)(\s*[:：-].*)?$/u.test(raw);
+}
+
+function normalizeSectionBodyLine(line: string): string {
+  return normalizeText(line)
+    .replace(/^[-•◦▪■◆▶▷◊\s]*/u, "")
+    .replace(/^\d+[\.)]\s*/u, "")
+    .trim();
+}
+
 function buildCondolenceDaysAnswerFromTables(question: string, blocks: Evidence[]): string | null {
   if (!isCondolenceLeaveDaysQuestion(question)) return null;
 
@@ -454,17 +469,24 @@ function buildSectionedCriteriaAnswer(blocks: Evidence[]): string | null {
       const line = ps[i];
       if (/^(?:[-•◦▪■◆▶▷◊\s]*)?(시행일|대상|기준|사용\s*절차|사용절차)\b/.test(line)) break;
       if (!line) continue;
+      if (isSectionHeadingLine(line)) continue;
       out.push(line);
     }
 
     return out;
   };
 
-  const 시행일 = dedupeTextLines(pickSection(/시행일/));
-  const 대상 = dedupeTextLines(pickSection(/대상/));
-  const 사용절차 = dedupeTextLines(
-    pickSection(/사용\s*절차|사용절차/).filter((x) => /①|②|③|④|⑤|\d+\)|\d+\./.test(x))
-  );
+  const 시행일 = dedupeStableLines(
+    pickSection(/시행일/).map(normalizeSectionBodyLine).filter(Boolean)
+  ).slice(0, 4);
+  const 대상 = dedupeStableLines(
+    pickSection(/대상/).map(normalizeSectionBodyLine).filter(Boolean)
+  ).slice(0, 8);
+  const 사용절차 = dedupeStableLines(
+    pickSection(/사용\s*절차|사용절차/)
+      .map(normalizeSectionBodyLine)
+      .filter((x) => Boolean(x) && /①|②|③|④|⑤|\d+\)|\d+\./.test(x))
+  ).slice(0, 8);
 
   let 기준표 = "";
   if (table && (table as any).content_html) {
@@ -519,8 +541,12 @@ function buildProcedureAnswer(question: string, blocks: Evidence[]): string | nu
   if (!lines.length) return null;
 
   if (isCompactDoc(lines)) {
-    const all = dedupeStableLines(lines.map((line) => `- ${line.replace(/^•\s*/g, "")}`));
-    return ["## 신청 절차", ...all].join("\n");
+    const proceduralOnly = lines.filter((line) => /(신청|절차|방법|경로|결재|요청|제출|첨부|시스템|포털)/.test(line));
+    const picked = (proceduralOnly.length ? proceduralOnly : lines)
+      .map((line) => `- ${normalizeSectionBodyLine(line)}`)
+      .filter((line) => line !== "-");
+    const all = dedupeStableLines(picked).slice(0, 8);
+    return all.length ? ["## 신청 절차", ...all].join("\n") : null;
   }
 
   const scored = lines.map((line, idx) => {
