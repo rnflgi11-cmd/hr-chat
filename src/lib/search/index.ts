@@ -396,6 +396,7 @@ ${h.table_html ?? ""}`));
     ok: true,
     answer,
     hits: evidenceUi,
+    llm_hits: normalizedEvidence.slice(0, 24),
     meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
   };
 }

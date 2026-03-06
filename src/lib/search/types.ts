@@ -26,5 +26,6 @@ export type SearchAnswer = {
   ok: true;
   answer: string;
   hits: Evidence[];
+  llm_hits?: Evidence[];
   meta: SearchMeta;
 };

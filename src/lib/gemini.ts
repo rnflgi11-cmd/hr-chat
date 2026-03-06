@@ -4,9 +4,41 @@ import type { Evidence } from "@/lib/search/types";
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 
+function tokenizeQuestion(question: string): string[] {
+  return Array.from(
+    new Set(
+      (question.match(/[A-Za-z0-9가-힣]+/g) ?? [])
+        .map((t) => t.trim().toLowerCase())
+        .filter((t) => t.length >= 2)
+        .filter((t) => !["알려줘", "알려", "기준", "절차", "방법", "문의", "규정"].includes(t))
+    )
+  );
+}
+
+function rankEvidence(question: string, hits: Evidence[]): Evidence[] {
+  const terms = tokenizeQuestion(question);
+
+  const scored = hits.map((e, idx) => {
+    const body = `${e.content_text ?? ""}\n${e.content_html ?? ""}`.toLowerCase();
+    let score = e.block_type === "table_html" ? 2 : 0;
+
+    for (const term of terms) {
+      if (body.includes(term)) score += Math.min(8, term.length);
+    }
+
+    if (/\d+\s*일/.test(body)) score += 3;
+    if (/기준|조건|대상|절차|유의사항|휴가일수/.test(body)) score += 2;
+
+    return { e, score, idx };
+  });
+
+  const sorted = scored.sort((a, b) => b.score - a.score || a.idx - b.idx);
+  return sorted.slice(0, 10).map((x) => x.e);
+}
+
 export async function generateGeminiAnswer(
   question: string,
-  draftAnswer: string,
+  _draftAnswer: string,
   hits: Evidence[]
 ): Promise<string | null> {
   try {
@@ -16,7 +48,9 @@ export async function generateGeminiAnswer(
       model: "gemini-1.5-flash",
     });
 
-    const evidenceText = hits
+    const selectedHits = rankEvidence(question, hits);
+
+    const evidenceText = selectedHits
       .slice(0, 8)
       .map((e, i) => {
         const content = e.block_type === "table_html" ? (e.content_html ?? "") : (e.content_text ?? "");
@@ -113,9 +147,6 @@ ${rules}
 질문:
 ${question}
 
-검색 초안:
-${draftAnswer}
-
 근거:
 ${evidenceText}
 
@@ -125,7 +156,13 @@ ${evidenceText}
 - 마지막 줄에 출처를 "출처: 파일명 / 항목" 형식으로 표기
 `;
 
-    const result = await model.generateContent(prompt);
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0,
+        topP: 0.1,
+      },
+    });
     const text = result.response.text().trim();
 
     return text || null;

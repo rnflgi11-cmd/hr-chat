@@ -28,22 +28,28 @@ export async function POST(req: NextRequest) {
 
     const enableLLM = process.env.ENABLE_LLM === "1";
 
-    if (enableLLM && Array.isArray(result?.hits) && result.hits.length > 0) {
+    const llmHits = Array.isArray(result?.llm_hits) ? result.llm_hits : result?.hits;
+
+    if (enableLLM && Array.isArray(llmHits) && llmHits.length > 0) {
       const geminiAnswer = await generateGeminiAnswer(
         q,
         String(result?.answer ?? ""),
-        result.hits
+        llmHits
       );
 
       if (geminiAnswer) {
+        const safeResult = { ...result };
+        delete safeResult.llm_hits;
         return NextResponse.json({
-          ...result,
+          ...safeResult,
           answer: geminiAnswer,
         });
       }
     }
 
-    return NextResponse.json(result);
+    const safeResult = { ...result };
+    delete safeResult.llm_hits;
+    return NextResponse.json(safeResult);
   } catch (err) {
     console.error(err);
     return NextResponse.json(
