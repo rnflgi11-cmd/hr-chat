@@ -1,6 +1,7 @@
 // src/app/api/answer/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { searchAnswer } from "@/lib/search"; // 너희 경로에 맞게
+import { generateGeminiAnswer } from "@/lib/gemini";
 
 const FALLBACK =
   "현재 규정 검색 서비스(Supabase) 연결이 불안정하여 답변을 생성하지 못했습니다.\n\n" +
@@ -28,6 +29,20 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await searchAnswer(q);
+
+    const enableLLM = process.env.ENABLE_LLM === "1";
+
+if (enableLLM && result?.hits?.length) {
+  const gemini = await generateGeminiAnswer(
+    q,
+    result.answer,
+    result.hits
+  );
+
+  if (gemini) {
+    result.answer = gemini;
+  }
+}
 
     if (debug) {
       const previews = (result.hits ?? []).slice(0, 12).map((h: any) => {
