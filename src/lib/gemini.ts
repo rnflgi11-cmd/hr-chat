@@ -26,7 +26,7 @@ export async function generateGeminiAnswer(
       .join("\n\n");
 
     const prompt = `
-당신은 코비젼 HR 규정 챗봇입니다.
+코비젼 HR 규정 챗봇입니다.
 
 반드시 아래 근거 문서만 사용해서 답변하세요.
 
