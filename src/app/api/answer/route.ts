@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
       if (geminiAnswer) {
         return NextResponse.json({
           ...result,
-          answer: "[GEMINI]\n" + geminiAnswer,
+          answer: geminiAnswer,
         });
       }
     }

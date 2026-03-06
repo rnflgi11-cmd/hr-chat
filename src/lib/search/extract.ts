@@ -23,7 +23,7 @@ export type ExtractResult = {
 };
 
 const FALLBACK =
-  "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀으로 문의해 주시기 바랍니다.";
+  "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
 /** ===== 텍스트 유틸 ===== */
 function normalizeText(s: string): string {

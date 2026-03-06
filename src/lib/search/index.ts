@@ -327,8 +327,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   if (annualLeave) return annualLeave;
 
   const noResultFallback =
-    "질문과 정확히 일치하는 규정 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요.\n" +
-    "예) '경조휴가 부모상 일수', '기타휴가 병가 기준'";
+    "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
   const terms = tokenize(question);
   const used0 = terms.length ? terms : [question];
