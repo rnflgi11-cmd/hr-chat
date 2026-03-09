@@ -24,6 +24,7 @@ export type SearchMeta = {
   llm_has_api_key?: boolean;
   llm_model?: string;
   llm_applied?: boolean;
+  llm_reason?: string;
   build_ref?: string;
 };
 

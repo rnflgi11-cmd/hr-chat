@@ -8,6 +8,18 @@ type LlmRefineInput = {
   evidence: Evidence[];
 };
 
+export type LlmRefineResult = {
+  answer: string | null;
+  reason:
+    | "disabled"
+    | "missing_api_key"
+    | "empty_input"
+    | "api_error"
+    | "bad_output_fallback"
+    | "same_as_draft"
+    | "applied";
+};
+
 const STRICT_FALLBACK =
   "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
@@ -72,6 +84,13 @@ export function getLlmRuntimeInfo() {
   const hasApiKey = Boolean(process.env.GEMINI_API_KEY);
   const model = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
   return { enabled, hasApiKey, model };
+}
+
+function normalizeForCompare(s: string): string {
+  return cleanText(s)
+    .toLowerCase()
+    .replace(/[\s:：·•()\[\]{}"'`.,!?\-]/g, "")
+    .trim();
 }
 
 function isBadModelOutput(out: string, draft: string): boolean {

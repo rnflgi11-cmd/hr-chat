@@ -247,7 +247,7 @@ function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: 
   const mdTable = htmlTableToMarkdown(table.content_html ?? "");
   if (!mdTable) return answer;
 
-  const cleanedAnswer = removeRepeatedListBelowTable(answer);
+  const cleanedAnswer = removeTableEchoLines(removeRepeatedListBelowTable(answer), mdTable);
   return ["### 기준표", mdTable, cleanedAnswer].filter(Boolean).join("\n\n");
 }
 
@@ -394,22 +394,24 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     ? extracted.answer_md
     : buildSummary(intent, normalizedEvidence, question);
 
-  const llmRuntime = getLlmRuntimeInfo();
-  
-  const llmAnswer = await refineAnswerWithLlm({
-    question,
-    draftAnswer: (draftedAnswer ?? "").trim(),
-    intent,
-    evidence: normalizedEvidence,
-  });
+const llmRuntime = getLlmRuntimeInfo();
 
- const llmApplied = Boolean(
-    llmAnswer &&
-      llmAnswer.trim() &&
-      llmAnswer.trim() !== (draftedAnswer ?? "").trim() &&
-      llmRuntime.enabled &&
-      llmRuntime.hasApiKey
-  );
+const llmResult = await refineAnswerWithLlm({
+  question,
+  draftAnswer: (draftedAnswer ?? "").trim(),
+  intent,
+  evidence: normalizedEvidence,
+});
+
+const llmAnswer = llmResult.answer;
+
+const llmApplied = Boolean(
+  llmAnswer &&
+    llmAnswer.trim() &&
+    llmResult.reason === "applied" &&
+    llmRuntime.enabled &&
+    llmRuntime.hasApiKey
+);
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
   const answer = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
@@ -429,6 +431,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
       llm_has_api_key: llmRuntime.hasApiKey,
       llm_model: llmRuntime.model,
       llm_applied: llmApplied,
+      llm_reason: llmResult.reason,
       build_ref: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? process.env.NODE_ENV,
     },
   };

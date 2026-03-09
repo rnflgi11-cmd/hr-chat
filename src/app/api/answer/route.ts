@@ -24,8 +24,6 @@ export async function POST(req: Request): Promise<Response> {
 
     const result = await searchAnswer(q);
 
-    const enableLLM = process.env.ENABLE_LLM === "1";
-
     const safeResult = { ...result };
     delete safeResult.llm_hits;
 
