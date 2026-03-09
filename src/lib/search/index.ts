@@ -403,14 +403,14 @@ const llmResult = await refineAnswerWithLlm({
   evidence: normalizedEvidence,
 });
 
-const llmAnswer = llmResult.answer;
+  const llmAnswer = llmResult?.answer ?? null;
 
-const llmApplied = Boolean(
-  llmAnswer &&
-    llmAnswer.trim() &&
-    llmResult.reason === "applied" &&
-    llmRuntime.enabled &&
-    llmRuntime.hasApiKey
+  const llmApplied = Boolean(
+    llmAnswer &&
+      llmAnswer.trim() &&
+      llmResult?.reason === "applied" &&
+      llmRuntime.enabled &&
+      llmRuntime.hasApiKey
 );
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
