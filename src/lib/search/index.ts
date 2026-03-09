@@ -85,52 +85,13 @@ async function tryPreferTopicDocumentHits(
   return preferred.length ? preferred : hits;
 }
 
-function formatAnswerStyle(question: string, answer: string): string {
-  const raw = (answer ?? "").trim();
-  if (!raw) return raw;
-  if (/^Q\.|^##\s/m.test(raw)) return raw;
-  if (/^\|.+\|$/m.test(raw)) return raw;
-
-  // 일수/기준/절차형 질문은 원문 순서를 최대한 보존
-  if (/(며칠|일수|기준|절차|안식년|경조|화환|연차)/.test(question)) {
-    return raw;
-  }
-
-  const lines = raw.split("\n").map((x) => x.trim()).filter(Boolean);
-  const bullets = lines.filter((x) => x.startsWith("- "));
-  if (!bullets.length) return raw;
-
-  const conditions = bullets.filter((x) => /(대상|조건|가능|불가|기준|해당)/.test(x));
-  const procedures = bullets.filter((x) => /(신청|절차|경로|결재|보고|요청)/.test(x));
-  const cautions = bullets.filter((x) => /(유의|주의|제외|예외|중복|미지급|소멸)/.test(x));
-  const remains = bullets.filter(
-    (x) => !conditions.includes(x) && !procedures.includes(x) && !cautions.includes(x)
-  );
-
-  const out: string[] = [];
-  out.push(`Q. ${question.trim()}`);
-  out.push("\nA. 관련 규정을 기준으로 핵심 내용을 정리하면 다음과 같습니다.");
-
-  if (conditions.length) {
-    out.push("\n신청 조건/적용 기준:");
-    out.push(...conditions);
-  }
-  if (procedures.length) {
-    out.push("\n신청 절차:");
-    out.push(...procedures);
-  }
-  if (cautions.length) {
-    out.push("\n유의 사항:");
-    out.push(...cautions);
-  }
-  if (remains.length) {
-    out.push("\n추가 확인 사항:");
-    out.push(...remains);
-  }
-
-  return out.join("\n");
+function normalizeAnswer(answer: string): string {
+  return (answer ?? "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
-
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/화환/.test(question)) return hits;
@@ -385,8 +346,7 @@ ${h.table_html ?? ""}`));
     evidence: normalizedEvidence,
   });
 
-  const answer = formatAnswerStyle(
-    question,
+    const answer = normalizeAnswer(
     (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback
   );
 
