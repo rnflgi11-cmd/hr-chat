@@ -8,6 +8,7 @@ import { SearchAnswer, Evidence, Row } from "./types";
 import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 import { refineAnswerWithLlm } from "@/lib/llm";
 
+
 type QuestionContext = {
   cleanedQuestion: string;
   preferredDocHint?: string;
