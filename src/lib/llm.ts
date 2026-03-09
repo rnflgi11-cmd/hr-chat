@@ -67,6 +67,13 @@ function isLlmEnabled() {
   return process.env.ENABLE_LLM === "1" || process.env.ENABLE_LLM_ANSWER === "1";
 }
 
+export function getLlmRuntimeInfo() {
+  const enabled = isLlmEnabled();
+  const hasApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const model = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
+  return { enabled, hasApiKey, model };
+}
+
 function isBadModelOutput(out: string, draft: string): boolean {
   const text = cleanText(out);
   if (!text) return true;

@@ -6,7 +6,7 @@ import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence, Row } from "./types";
 import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
-import { refineAnswerWithLlm } from "@/lib/llm";
+import { getLlmRuntimeInfo, refineAnswerWithLlm } from "@/lib/llm";
 
 type QuestionContext = {
   cleanedQuestion: string;
@@ -236,7 +236,7 @@ function removeTableEchoLines(answer: string, markdownTable: string): string {
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
-   
+
 function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: Evidence[]): string {
   if (!preferTable) return answer;
   if (/^\|.*\|$/m.test(answer)) return answer;
@@ -394,12 +394,22 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     ? extracted.answer_md
     : buildSummary(intent, normalizedEvidence, question);
 
+  const llmRuntime = getLlmRuntimeInfo();
+  
   const llmAnswer = await refineAnswerWithLlm({
     question,
     draftAnswer: (draftedAnswer ?? "").trim(),
     intent,
     evidence: normalizedEvidence,
   });
+
+ const llmApplied = Boolean(
+    llmAnswer &&
+      llmAnswer.trim() &&
+      llmAnswer.trim() !== (draftedAnswer ?? "").trim() &&
+      llmRuntime.enabled &&
+      llmRuntime.hasApiKey
+  );
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
   const answer = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
@@ -411,6 +421,15 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
     answer,
     hits: evidenceUi,
     llm_hits: normalizedEvidence.slice(0, 24),
-    meta: { intent, best_doc_id: bestDocId, best_filename: doc.filename },
+    meta: {
+      intent,
+      best_doc_id: bestDocId,
+      best_filename: doc.filename,
+      llm_enabled: llmRuntime.enabled,
+      llm_has_api_key: llmRuntime.hasApiKey,
+      llm_model: llmRuntime.model,
+      llm_applied: llmApplied,
+      build_ref: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? process.env.NODE_ENV,
+    },
   };
 }

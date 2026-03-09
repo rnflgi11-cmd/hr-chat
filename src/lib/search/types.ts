@@ -20,6 +20,11 @@ export type SearchMeta = {
   intent: string;
   best_doc_id?: string;
   best_filename?: string;
+  llm_enabled?: boolean;
+  llm_has_api_key?: boolean;
+  llm_model?: string;
+  llm_applied?: boolean;
+  build_ref?: string;
 };
 
 export type SearchAnswer = {
