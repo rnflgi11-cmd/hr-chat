@@ -152,5 +152,23 @@ export function applyTopicFilter(hits: Row[], topic: TopicProfile): Row[] {
     return true;
   });
 
-  return strict.length ? strict : hits;
+  if (strict.length) return strict;
+
+  if (topic.include) {
+    const includeOnly = hits.filter((h) => {
+      const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
+      return topic.include?.test(hay);
+    });
+    if (includeOnly.length) return includeOnly;
+  }
+
+  if (topic.exclude) {
+    const excludeOnly = hits.filter((h) => {
+      const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
+      return !topic.exclude?.test(hay);
+    });
+    if (excludeOnly.length) return excludeOnly;
+  }
+
+  return hits;
 }

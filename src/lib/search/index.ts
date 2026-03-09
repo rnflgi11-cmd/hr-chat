@@ -8,7 +8,6 @@ import { SearchAnswer, Evidence, Row } from "./types";
 import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 import { refineAnswerWithLlm } from "@/lib/llm";
 
-
 type QuestionContext = {
   cleanedQuestion: string;
   preferredDocHint?: string;
@@ -194,6 +193,50 @@ function removeRepeatedListBelowTable(answer: string): string {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function normalizeLooseText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[|,:：·•()\[\]{}"'`.-]/g, "")
+    .trim();
+}
+
+function removeTableEchoLines(answer: string, markdownTable: string): string {
+  const tableLines = markdownTable
+    .split("\n")
+    .map((x) => x.trim())
+    .filter((x) => /^\|.*\|$/.test(x) && !/^\|\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|$/.test(x));
+
+    const tableCells = new Set(
+    tableLines
+      .flatMap((line) => line.split("|").map((x) => normalizeLooseText(x)))
+      .filter((x) => x.length >= 2)
+  );
+
+  if (!tableCells.size) return answer;
+
+    const out: string[] = [];
+  for (const raw of answer.split("\n")) {
+    const line = raw.trim();
+    if (!line) {
+      if (out.length && out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+    if (/^#{1,4}\s/.test(line) || /^[-*]\s/.test(line) || /^\d+[.)]\s/.test(line)) {
+      out.push(raw);
+      continue;
+    }
+
+    const key = normalizeLooseText(line);
+    if (!key) continue;
+    const matched = Array.from(tableCells).filter((cell) => key.includes(cell) || cell.includes(key)).length;
+    if (matched >= 2) continue;
+
+     out.push(raw);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+   
 function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: Evidence[]): string {
   if (!preferTable) return answer;
   if (/^\|.*\|$/m.test(answer)) return answer;
