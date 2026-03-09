@@ -101,8 +101,8 @@ function dedupeAnswerLines(answer: string): string {
 
   for (const raw of lines) {
     const line = raw.trimEnd();
-    if (!line.trim()) {
 
+    if (!line.trim()) {
       if (out.length && out[out.length - 1] !== "") out.push("");
       continue;
     }
@@ -165,8 +165,16 @@ function htmlTableToMarkdown(html: string): string {
   const normalized = parsed.map((r) => Array.from({ length: width }, (_, i) => r[i] ?? ""));
 
   const hasHeader = /<th[\s\S]*?>/i.test(rows[0]);
-  const header = hasHeader ? normalized[0] : Array.from({ length: width }, (_, i) => `항목${i + 1}`);
-  const body = hasHeader ? normalized.slice(1) : normalized;
+  const headerHint = /(구분|유형|대상|기준|절차|일수|휴가일수|수당|비고|항목|서류|조건|요건)/;
+  const firstRowLooksLikeHeader = !hasHeader && normalized[0]?.some((c) => headerHint.test(c ?? ""));
+
+  const header = hasHeader
+    ? normalized[0]
+    : firstRowLooksLikeHeader
+      ? normalized[0]
+      : Array.from({ length: width }, (_, i) => `컬럼${i + 1}`);
+
+  const body = hasHeader || firstRowLooksLikeHeader ? normalized.slice(1) : normalized;
 
   const head = `| ${header.join(" | ")} |`;
   const divider = `| ${header.map(() => "---").join(" | ")} |`;
@@ -174,6 +182,29 @@ function htmlTableToMarkdown(html: string): string {
 
   return [head, divider, ...bodyLines].join("\n");
 }
+
+function removeRepeatedListBelowTable(answer: string): string {
+  const lines = answer.split("\n");
+  const out: string[] = [];
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) {
+      if (out.length && out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+
+    if (/^[\-•]?\s*[^\n]{1,24}\s*[—-]\s*[^\n]+$/.test(t)) {
+      // 경조/기타휴가 표 아래 중복 라인 패턴 제거
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 
 function ensureTableFirstAnswer(question: string, answer: string, evidence: Evidence[]): string {
   if (/^\|.*\|$/m.test(answer)) return answer;
@@ -187,7 +218,32 @@ function ensureTableFirstAnswer(question: string, answer: string, evidence: Evid
   const mdTable = htmlTableToMarkdown(table.content_html ?? "");
   if (!mdTable) return answer;
 
-  return ["### 기준표", mdTable, answer].filter(Boolean).join("\n\n");
+  const cleanedAnswer = removeRepeatedListBelowTable(answer);
+  return ["### 기준표", mdTable, cleanedAnswer].filter(Boolean).join("\n\n");
+}
+
+function applyAnnualLeaveStrictFilter(question: string, hits: Row[]): Row[] {
+  const q = question.replace(/\s+/g, " ").trim();
+  if (!/연차|반차|월차/.test(q)) return hits;
+  if (/경조|기타\s*휴가|안식년|프로젝트\s*수당|화환/.test(q)) return hits;
+
+  const includeAnnual = /(연차|반차|월차|연차수당|잔여\s*연차|발생\s*기준|사용\s*기준|소멸|이월)/;
+  const excludeOther = /(경조|결혼|조사|사망|병역|민방위|예비군|안식년|화환|프로젝트\s*수당)/;
+
+  const strict = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeAnnual.test(hay) && !excludeOther.test(hay);
+  });
+  if (strict.length) return strict;
+
+  const includeOnly = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return includeAnnual.test(hay);
+  });
+
+  return includeOnly.length ? includeOnly : hits;
 }
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
@@ -414,6 +470,7 @@ ${h.table_html ?? ""}`));
     if (filtered.length) hits = filtered;
   }
 
+  hits = applyAnnualLeaveStrictFilter(question, hits);
   hits = applyWreathSafetyFilter(question, hits);
   hits = applyCondolenceLeaveStrictFilter(question, hits);
   hits = applyEtcLeaveStrictFilter(question, hits);
