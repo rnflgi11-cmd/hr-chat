@@ -141,6 +141,54 @@ function normalizeAnswer(answer: string): string {
   return dedupeAnswerLines(normalized);
 }
 
+function htmlTableToMarkdown(html: string): string {
+  const rows = Array.from(html.matchAll(/<tr[\s\S]*?<\/tr>/gi)).map((m) => m[0]);
+  if (!rows.length) return "";
+
+  const parsed = rows
+    .map((row) =>
+      Array.from(row.matchAll(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi)).map((m) =>
+        (m[2] ?? "")
+          .replace(/<br\s*\/?>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/&amp;/gi, "&")
+          .replace(/\|/g, "\\|")
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+    )
+    .filter((cells) => cells.some(Boolean));
+
+  if (!parsed.length) return "";
+  const width = Math.max(...parsed.map((r) => r.length));
+  const normalized = parsed.map((r) => Array.from({ length: width }, (_, i) => r[i] ?? ""));
+
+  const hasHeader = /<th[\s\S]*?>/i.test(rows[0]);
+  const header = hasHeader ? normalized[0] : Array.from({ length: width }, (_, i) => `항목${i + 1}`);
+  const body = hasHeader ? normalized.slice(1) : normalized;
+
+  const head = `| ${header.join(" | ")} |`;
+  const divider = `| ${header.map(() => "---").join(" | ")} |`;
+  const bodyLines = body.map((r) => `| ${r.join(" | ")} |`);
+
+  return [head, divider, ...bodyLines].join("\n");
+}
+
+function ensureTableFirstAnswer(question: string, answer: string, evidence: Evidence[]): string {
+  if (/^\|.*\|$/m.test(answer)) return answer;
+
+  const shouldPreferTable = /(경조|기타\s*휴가|기타휴가|프로젝트\s*수당|프로젝트수당|기준|일수|종류)/.test(question);
+  if (!shouldPreferTable) return answer;
+
+  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
+  if (!table) return answer;
+
+  const mdTable = htmlTableToMarkdown(table.content_html ?? "");
+  if (!mdTable) return answer;
+
+  return ["### 기준표", mdTable, answer].filter(Boolean).join("\n\n");
+}
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/화환/.test(question)) return hits;
@@ -395,8 +443,9 @@ ${h.table_html ?? ""}`));
     evidence: normalizedEvidence,
   });
 
- const answer = normalizeAnswer(
-    (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback
+  const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
+  const answer = normalizeAnswer(
+    ensureTableFirstAnswer(question, rawAnswer, normalizedEvidence)
   );
 
   const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
