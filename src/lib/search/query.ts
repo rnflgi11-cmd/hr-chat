@@ -13,7 +13,7 @@ export function tokenize(q: string) {
     .filter((t) => t.length >= 2)
     .filter((t) => !STOP.has(t));
 
-  return Array.from(new Set(base)).sort((a, b) => b.length - a.length).slice(0, 3);
+  return Array.from(new Set(base)).sort((a, b) => b.length - a.length).slice(0, 4);
 }
 
 export function buildWebsearchQuery(q: string) {
@@ -30,10 +30,17 @@ export function pickAnchors(terms: string[]) {
 }
 
 export function inferIntent(q: string) {
-  if (/화환/.test(q)) return "경조/복리후생";
-  if (/경조|조위|결혼|부고|사망/.test(q)) return "경조/경조휴가";
-  if (/연차|반차|휴가/.test(q)) return "휴가";
-  if (/수당|정산|지급/.test(q)) return "수당/정산";
+  const raw = (q ?? "").replace(/\s+/g, " ").trim();
+
+  if (/프로젝트\s*수당|프로젝트수당/.test(raw)) return "수당/프로젝트";
+  if (/기타\s*휴가|기타휴가|병역의무|민방위|예비군|직무\s*교육|병가/.test(raw)) return "휴가/기타휴가";
+  if (/연차|반차|월차|연차수당|잔여\s*연차|연차\s*생성|연차\s*발생/.test(raw)) return "휴가/연차";
+  if (/화환/.test(raw)) return "경조/복리후생";
+  if (/복리후생|복지|혜택|지원/.test(raw)) return "복리후생";
+  if (/경조|조위|결혼|부고|사망/.test(raw)) return "경조/경조휴가";
+  if (/안식년/.test(raw)) return "휴가/안식년";
+  if (/휴가/.test(raw)) return "휴가";
+  if (/수당|정산|지급/.test(raw)) return "수당/정산";
   return "규정 검색 결과";
 }
 
@@ -42,16 +49,14 @@ export function expandQueryTerms(q: string, terms: string[]): string[] {
   const raw = (q ?? "").trim();
   const noSpace = raw.replace(/\s+/g, "");
 
-  // 기본: 원문/공백제거 버전도 후보에
   if (raw) out.add(raw);
   if (noSpace) out.add(noSpace);
 
-  // ✅ 붙여쓴 "기타휴가" → "기타 휴가"
   if (noSpace.includes("기타휴가")) {
     out.add("기타 휴가");
+    out.add("기타휴가");
     out.add("기타");
     out.add("휴가");
-    // 기타휴가 문서에서 자주 나오는 대표 키워드(검색 보강)
     out.add("병역의무");
     out.add("민방위");
     out.add("예비군");
@@ -60,24 +65,46 @@ export function expandQueryTerms(q: string, terms: string[]): string[] {
     out.add("병가");
   }
 
-  // ✅ 경조휴가/안식년/프로젝트수당 등 붙여쓰기 보강
   if (noSpace.includes("경조휴가") || (/경조/.test(raw) && /휴가/.test(raw))) {
     out.add("경조휴가");
+    out.add("경조 휴가");
     out.add("경조");
-    out.add("휴가");
   }
+
   if (noSpace.includes("안식년")) {
     out.add("안식년 휴가");
     out.add("장기근속");
     out.add("포상");
   }
-  if (noSpace.includes("프로젝트수당")) {
+
+  if (noSpace.includes("프로젝트수당") || (/프로젝트/.test(raw) && /수당/.test(raw))) {
     out.add("프로젝트 수당");
+    out.add("프로젝트수당");
+    out.add("지급 기준");
     out.add("수당");
     out.add("정산");
   }
 
-    if (noSpace.includes("화환")) {
+  if (/연차\s*생성|연차\s*발생|연차\s*기준|잔여\s*연차|연차\s*수당|연차/.test(raw)) {
+    out.add("연차");
+    out.add("연차 발생");
+    out.add("연차 생성");
+    out.add("연차 기준");
+    out.add("연차수당");
+    out.add("잔여연차");
+  }
+
+  if (/복리후생|복지|혜택|지원/.test(raw)) {
+    out.add("복리후생");
+    out.add("복지");
+    out.add("혜택");
+    out.add("지원");
+    out.add("경조");
+    out.add("수당");
+    out.add("휴가");
+  }
+
+  if (noSpace.includes("화환")) {
     out.add("화환 신청");
     out.add("화환신청서");
     out.add("발주");

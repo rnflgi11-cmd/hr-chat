@@ -60,9 +60,12 @@ async function tryPreferTopicDocumentHits(
   const hints: string[] = [];
 
   if (/경조\s*휴가|경조휴가/.test(q)) hints.push("경조휴가", "경조 휴가", "경조");
+  if (/기타\s*휴가|기타휴가|병역의무|민방위|예비군|병가/.test(q)) hints.push("기타휴가", "기타 휴가", "병역의무", "민방위", "예비군", "병가");
+  if (/연차|반차|월차|연차\s*생성|연차\s*발생|잔여\s*연차/.test(q)) hints.push("연차", "연차 발생", "연차수당", "잔여연차");
   if (/안식년/.test(q)) hints.push("안식년");
   if (/화환/.test(q)) hints.push("화환");
-  if (/프로젝트\s*수당|프로젝트수당/.test(q)) hints.push("프로젝트 수당", "프로젝트수당");
+  if (/복리후생|복지|혜택|지원/.test(q)) hints.push("복리후생", "복지", "혜택", "지원");
+  if (/프로젝트\s*수당|프로젝트수당/.test(q)) hints.push("프로젝트 수당", "프로젝트수당", "지급 기준");
 
   const uniqHints = Array.from(new Set(hints)).filter(Boolean);
   if (!uniqHints.length) return hits;
@@ -227,7 +230,7 @@ function applyAnnualLeaveStrictFilter(question: string, hits: Row[]): Row[] {
   if (!/연차|반차|월차/.test(q)) return hits;
   if (/경조|기타\s*휴가|안식년|프로젝트\s*수당|화환/.test(q)) return hits;
 
-  const includeAnnual = /(연차|반차|월차|연차수당|잔여\s*연차|발생\s*기준|사용\s*기준|소멸|이월)/;
+  const includeAnnual = /(연차|반차|월차|연차수당|잔여\s*연차|연차\s*생성|연차\s*발생|발생\s*기준|사용\s*기준|소멸|이월)/;
   const excludeOther = /(경조|결혼|조사|사망|병역|민방위|예비군|안식년|화환|프로젝트\s*수당)/;
 
   const strict = hits.filter((h) => {
@@ -244,6 +247,35 @@ ${h.table_html ?? ""}`;
   });
 
   return includeOnly.length ? includeOnly : hits;
+}
+
+function applyProjectAllowanceStrictFilter(question: string, hits: Row[]): Row[] {
+  if (!/프로젝트\s*수당|프로젝트수당/.test(question)) return hits;
+
+  const include = /(프로젝트\s*수당|프로젝트수당|지급\s*기준|PM팀|개발자|상주\s*근무|1일\s*\d+[\d,]*\s*원)/;
+  const exclude = /(경조|결혼|조사|사망|화환|안식년|연차|기타\s*휴가|병역의무)/;
+
+  const strict = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return include.test(hay) && !exclude.test(hay);
+  });
+  if (strict.length) return strict;
+
+  return hits;
+}
+
+function applyWelfareStrictFilter(question: string, hits: Row[]): Row[] {
+  if (!/복리후생|복지|혜택|지원/.test(question)) return hits;
+
+  const include = /(복리후생|복지|혜택|지원|수당|휴가|경조|화환|안식년|연차)/;
+  const strict = hits.filter((h) => {
+    const hay = `${h.text ?? ""}
+${h.table_html ?? ""}`;
+    return include.test(hay);
+  });
+
+  return strict.length ? strict : hits;
 }
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
@@ -463,13 +495,16 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   if (/휴가/.test(intent)) {
     // ✅ table 블록(text=null)도 포함되도록 text + table_html 모두 검사
     const filtered = hits
-      .filter((h: Row) => /휴가|연차|경조/.test(`${h.text ?? ""}
+      .filter((h: Row) => /휴가|연차|경조|병역의무|민방위|예비군|병가/.test(`${h.text ?? ""}
 ${h.table_html ?? ""}`))
       .filter((h: Row) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(`${h.text ?? ""}
 ${h.table_html ?? ""}`));
     if (filtered.length) hits = filtered;
   }
 
+  hits = applyAnnualLeaveStrictFilter(question, hits);
+  hits = applyProjectAllowanceStrictFilter(question, hits);
+  hits = applyWelfareStrictFilter(question, hits);
   hits = applyAnnualLeaveStrictFilter(question, hits);
   hits = applyWreathSafetyFilter(question, hits);
   hits = applyCondolenceLeaveStrictFilter(question, hits);

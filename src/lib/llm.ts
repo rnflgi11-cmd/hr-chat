@@ -13,15 +13,13 @@ const STRICT_FALLBACK =
 
 const HR_RULES_PROMPT = [
   "당신은 코비젼 인사팀 HR 안내 담당자입니다.",
-  "반드시 evidence와 draft answer 안에서만 답변하세요.",
+  "반드시 evidence와 draft answer 범위 안에서만 답변하세요.",
   "근거에 없는 내용/수치/표를 생성하지 마세요.",
-  "같은 의미의 문장을 반복하지 마세요.",
-  "질문에 '기준/대상/요건/절차/종류/일수'가 있으면 설명형으로 간주하세요.",
-  "설명형 질문은 핵심 요약 1줄 + 항목별 최대 6개 bullet로 답하세요.",
-  "단순 사실 확인형일 때만 3~5줄 이내로 간결하게 답하세요.",
-  "질문과 무관한 운영규칙 문구를 답변에 출력하지 마세요.",
-  "내부 판단 과정은 출력하지 마세요.",
-  "표 근거가 있으면 표를 우선 제시하고, 마지막에 출처를 적으세요.",
+  "질문과 무관한 운영규칙 문구를 출력하지 마세요.",
+  "내부 판단 과정은 절대 출력하지 마세요.",
+  "답변은 자연스러운 한국어 존댓말로 작성하세요.",
+  "단답형으로 끝내지 말고, 질문 의도에 맞는 핵심 설명을 포함하세요.",
+  "표 근거가 있으면 표를 우선 제시하고, 이어 핵심 해설을 2~6개 bullet로 정리하세요.",
   `근거가 부족하면 정확히 아래 문구만 출력: ${STRICT_FALLBACK}`,
 ].join("\n");
 
@@ -76,7 +74,7 @@ function isBadModelOutput(out: string, draft: string): boolean {
     return true;
   }
 
-  if (text.length < 30 && draft.length > 120) return true;
+  if (text.length < 40 && draft.length > 220) return true;
 
   const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
   const keys = lines.map((x) => x.toLowerCase().replace(/^[-*\d.)\s]+/, "").replace(/[\s:：·•()\[\]{}"'`]/g, ""));
@@ -110,11 +108,10 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<string
     "",
     "출력 지시:",
     "1) 최종 답변 Markdown 본문만 출력",
-    "2) draft answer의 문장 순서/핵심 수치/표를 가능한 유지",
-    "3) 같은 의미 반복 문장을 제거하고 자연스럽게 다듬기",
-    "4) 질문에 기준/대상/요건/절차/종류/일수가 있으면 설명형으로 작성",
-    "5) 설명형은 bullet 최대 6개, 사실형만 3~5줄",
-    "6) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
+    "2) draft answer의 핵심 수치/절차/표를 보존하면서 문장을 자연스럽게 정리",
+    "3) 같은 의미 반복 문장은 제거",
+    "4) 답변 구조: 핵심요약 1문장 + 상세 bullet 2~6개 + (가능하면) 주의/예외 1~2개",
+    "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
   ].join("\n");
 
   const res = await fetch(
