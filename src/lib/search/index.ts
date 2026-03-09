@@ -85,13 +85,62 @@ async function tryPreferTopicDocumentHits(
   return preferred.length ? preferred : hits;
 }
 
+function normalizeLineKey(line: string): string {
+  return line
+    .toLowerCase()
+    .replace(/^[-*\d.)\s]+/, "")
+    .replace(/[\s:：·•()\[\]{}"'`]/g, "")
+    .trim();
+}
+
+function dedupeAnswerLines(answer: string): string {
+  const lines = answer.split("\n");
+  const seen = new Set<string>();
+  const out: string[] = [];
+  let inTable = false;
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) {
+
+      if (out.length && out[out.length - 1] !== "") out.push("");
+      continue;
+    }
+
+    if (/^\|.*\|$/.test(line)) {
+      inTable = true;
+      out.push(line);
+      continue;
+    }
+
+    if (inTable && /^[:\-\s|]+$/.test(line)) {
+      out.push(line);
+      continue;
+    }
+
+    if (inTable && !/^\|.*\|$/.test(line)) {
+      inTable = false;
+    }
+
+    const key = normalizeLineKey(line);
+    if (key.length >= 6 && seen.has(key)) continue;
+    if (key.length >= 6) seen.add(key);
+    out.push(line);
+  }
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function normalizeAnswer(answer: string): string {
-  return (answer ?? "")
+  const normalized = (answer ?? "")
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  return dedupeAnswerLines(normalized);
 }
+
 
 function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/화환/.test(question)) return hits;
@@ -346,7 +395,7 @@ ${h.table_html ?? ""}`));
     evidence: normalizedEvidence,
   });
 
-    const answer = normalizeAnswer(
+ const answer = normalizeAnswer(
     (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback
   );
 

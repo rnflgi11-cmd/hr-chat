@@ -15,6 +15,9 @@ const HR_RULES_PROMPT = [
   "당신은 코비젼 인사팀 HR 안내 담당자입니다.",
   "반드시 evidence와 draft answer 안에서만 답변하세요.",
   "근거에 없는 내용/수치/표를 생성하지 마세요.",
+  "같은 의미의 문장을 반복하지 마세요.",
+  "질문이 간단 사실 확인형이면 3~5줄 이내로 간결하게 답하세요.",
+  "질문이 절차/기준 설명형이면 핵심 요약 1줄 + 항목별 최대 6개 bullet로 답하세요.",
   "질문과 무관한 운영규칙 문구를 답변에 출력하지 마세요.",
   "내부 판단 과정은 출력하지 마세요.",
   "표 근거가 있으면 표를 우선 제시하고, 마지막에 출처를 적으세요.",
@@ -73,6 +76,12 @@ function isBadModelOutput(out: string, draft: string): boolean {
   }
 
   if (text.length < 30 && draft.length > 120) return true;
+
+  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const keys = lines.map((x) => x.toLowerCase().replace(/^[-*\d.)\s]+/, "").replace(/[\s:：·•()\[\]{}"'`]/g, ""));
+  const uniq = new Set(keys);
+  if (lines.length >= 6 && uniq.size / lines.length < 0.65) return true;
+
   return false;
 }
 
@@ -101,8 +110,9 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<string
     "출력 지시:",
     "1) 최종 답변 Markdown 본문만 출력",
     "2) draft answer의 문장 순서/핵심 수치/표를 가능한 유지",
-    "3) 불필요한 반복/깨진 문장만 최소 교정",
-    "4) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
+    "3) 같은 의미 반복 문장을 제거하고 자연스럽게 다듬기",
+    "4) 질문이 단순 사실형이면 3~5줄, 설명형이면 bullet 최대 6개",
+    "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
   ].join("\n");
 
   const res = await fetch(
