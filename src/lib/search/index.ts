@@ -1,6 +1,6 @@
-// lib/search/index.ts
 import { retrieveCandidates } from "./retrieve";
-import { inferIntent, pickAnchors, tokenize, expandQueryTerms } from "./query";
+import { pickAnchors, tokenize } from "./query";
+import { applyTopicFilter, buildTopicQueryTerms, classifyTopic } from "./router";
 import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
@@ -54,20 +54,9 @@ async function tryPreferDocumentHits(
 async function tryPreferTopicDocumentHits(
   sb: Awaited<ReturnType<typeof retrieveCandidates>>["sb"],
   hits: Row[],
-  question: string
+  topicHints: string[]
 ): Promise<Row[]> {
-  const q = question.replace(/\s+/g, " ").trim();
-  const hints: string[] = [];
-
-  if (/경조\s*휴가|경조휴가/.test(q)) hints.push("경조휴가", "경조 휴가", "경조");
-  if (/기타\s*휴가|기타휴가|병역의무|민방위|예비군|병가/.test(q)) hints.push("기타휴가", "기타 휴가", "병역의무", "민방위", "예비군", "병가");
-  if (/연차|반차|월차|연차\s*생성|연차\s*발생|잔여\s*연차/.test(q)) hints.push("연차", "연차 발생", "연차수당", "잔여연차");
-  if (/안식년/.test(q)) hints.push("안식년");
-  if (/화환/.test(q)) hints.push("화환");
-  if (/복리후생|복지|혜택|지원/.test(q)) hints.push("복리후생", "복지", "혜택", "지원");
-  if (/프로젝트\s*수당|프로젝트수당/.test(q)) hints.push("프로젝트 수당", "프로젝트수당", "지급 기준");
-
-  const uniqHints = Array.from(new Set(hints)).filter(Boolean);
+  const uniqHints = Array.from(new Set(topicHints)).filter(Boolean);
   if (!uniqHints.length) return hits;
 
   const ids = new Set<string>();
@@ -197,23 +186,16 @@ function removeRepeatedListBelowTable(answer: string): string {
       continue;
     }
 
-    if (/^[\-•]?\s*[^\n]{1,24}\s*[—-]\s*[^\n]+$/.test(t)) {
-      // 경조/기타휴가 표 아래 중복 라인 패턴 제거
-      continue;
-    }
-
+    if (/^[\-•]?\s*[^\n]{1,24}\s*[—-]\s*[^\n]+$/.test(t)) continue;
     out.push(line);
   }
 
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-
-function ensureTableFirstAnswer(question: string, answer: string, evidence: Evidence[]): string {
+function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: Evidence[]): string {
+  if (!preferTable) return answer;
   if (/^\|.*\|$/m.test(answer)) return answer;
-
-  const shouldPreferTable = /(경조|기타\s*휴가|기타휴가|프로젝트\s*수당|프로젝트수당|기준|일수|종류)/.test(question);
-  if (!shouldPreferTable) return answer;
 
   const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
   if (!table) return answer;
@@ -225,161 +207,18 @@ function ensureTableFirstAnswer(question: string, answer: string, evidence: Evid
   return ["### 기준표", mdTable, cleanedAnswer].filter(Boolean).join("\n\n");
 }
 
-function applyAnnualLeaveStrictFilter(question: string, hits: Row[]): Row[] {
-  const q = question.replace(/\s+/g, " ").trim();
-  if (!/연차|반차|월차/.test(q)) return hits;
-  if (/경조|기타\s*휴가|안식년|프로젝트\s*수당|화환/.test(q)) return hits;
-
-  const includeAnnual = /(연차|반차|월차|연차수당|잔여\s*연차|연차\s*생성|연차\s*발생|발생\s*기준|사용\s*기준|소멸|이월)/;
-  const excludeOther = /(경조|결혼|조사|사망|병역|민방위|예비군|안식년|화환|프로젝트\s*수당)/;
-
-  const strict = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeAnnual.test(hay) && !excludeOther.test(hay);
-  });
-  if (strict.length) return strict;
-
-  const includeOnly = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeAnnual.test(hay);
-  });
-
-  return includeOnly.length ? includeOnly : hits;
-}
-
-function applyProjectAllowanceStrictFilter(question: string, hits: Row[]): Row[] {
-  if (!/프로젝트\s*수당|프로젝트수당/.test(question)) return hits;
-
-  const include = /(프로젝트\s*수당|프로젝트수당|지급\s*기준|PM팀|개발자|상주\s*근무|1일\s*\d+[\d,]*\s*원)/;
-  const exclude = /(경조|결혼|조사|사망|화환|안식년|연차|기타\s*휴가|병역의무)/;
-
-  const strict = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return include.test(hay) && !exclude.test(hay);
-  });
-  if (strict.length) return strict;
-
-  return hits;
-}
-
-function applyWelfareStrictFilter(question: string, hits: Row[]): Row[] {
-  if (!/복리후생|복지|혜택|지원/.test(question)) return hits;
-
-  const include = /(복리후생|복지|혜택|지원|수당|휴가|경조|화환|안식년|연차)/;
-  const strict = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return include.test(hay);
-  });
-
-  return strict.length ? strict : hits;
-}
-
-function applyWreathSafetyFilter(question: string, hits: Row[]): Row[] {
-  if (!/화환/.test(question)) return hits;
-
-  const includeRe = /(화환|발주|신청서|도착|배송)/;
-  const excludeRe = /(경조금|조위금|근속\s*2년|근속2년)/;
-
-  const preferred = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeRe.test(hay) && !excludeRe.test(hay);
-  });
-  if (preferred.length) return preferred;
-
-  const includeOnly = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeRe.test(hay);
-  });
-  if (includeOnly.length) return includeOnly;
-
-  const softened = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return !excludeRe.test(hay);
-  });
-
-  return softened.length ? softened : hits;
-}
-
-function applyCondolenceLeaveStrictFilter(question: string, hits: Row[]): Row[] {
-  if (!/경조\s*휴가|경조휴가/.test(question)) return hits;
-
-  const includeCore = /(경조\s*휴가|경조휴가|경조유형|조의|조문|부고|사망|결혼)/;
-  const includeDays = /(\d+\s*일|휴가일수|일수|근속\s*2년|근속2년)/;
-  const excludeNoise = /(안식년|선연차|프로젝트\s*수당|프로젝트수당|수당\s*정산|화환\s*신청|화환신청)/;
-
-  const strict = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeCore.test(hay) && includeDays.test(hay) && !excludeNoise.test(hay);
-  });
-  if (strict.length) return strict;
-
-  const coreOnly = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
-    return includeCore.test(hay) && !excludeNoise.test(hay);
-  });
-
-  return coreOnly.length ? coreOnly : hits;
-}
-
-function applyEtcLeaveStrictFilter(question: string, hits: Row[]): Row[] {
-  const q = question.replace(/\s+/g, " ").trim();
-
-  // "기타휴가" 또는 기타휴가 대표 키워드가 있는 경우
-  const isEtc =
-    /기타\s*휴가|기타휴가/.test(q) ||
-    /(예비군|민방위|병역의무|직무\s*교육|교육\s*참석|병가)/.test(q);
-
-  if (!isEtc) return hits;
-
-  const includeEtc = /(기타|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|훈련\s*증명서|연차\s*차감\s*없음|사전\s*기안)/;
-  const excludeCondolence = /(경조|결혼|조사|사망|부고|조의|조문|출산|조위금|경조금)/;
-
-  // 기타휴가 관련 내용 + 경조 노이즈 제외
-  const strict = hits.filter((h) => {
-    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
-    return includeEtc.test(hay) && !excludeCondolence.test(hay);
-  });
-  if (strict.length) return strict;
-
-  // 그래도 없으면: 기타 키워드만 포함된 블록 우선
-  const etcOnly = hits.filter((h) => {
-    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
-    return includeEtc.test(hay);
-  });
-  if (etcOnly.length) return etcOnly;
-
-  // 마지막으로: 경조 노이즈만이라도 빼기
-  const softened = hits.filter((h) => {
-    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
-    return !excludeCondolence.test(hay);
-  });
-  return softened.length ? softened : hits;
-}
-
-
 function applyLeaveDaysSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/(며칠|몇\s*일|일수|기간)/.test(question)) return hits;
   if (!/(경조|경조\s*휴가|휴가)/.test(question)) return hits;
 
   const withDays = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
+  const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
     return /(\d+\s*일|휴가일수|일수|근속\s*2년|근속2년)/.test(hay);
   });
   if (withDays.length) return withDays;
 
   const withoutCautionOnly = hits.filter((h) => {
-    const hay = `${h.text ?? ""}
-${h.table_html ?? ""}`;
+    const hay = `${h.text ?? ""}\n${h.table_html ?? ""}`;
     return !/(유의사항|사전\s*휴가\s*신청\s*사유|사후\s*휴가\s*신청\s*사유)/.test(hay);
   });
 
@@ -438,7 +277,6 @@ function tryAnnualLeaveEstimator(question: string): SearchAnswer | null {
   };
 }
 
-/** 같은 문장 중복 제거 + p 우선 + table 1개 포함 */
 function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
   const seen = new Set<string>();
@@ -467,7 +305,8 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const { cleanedQuestion, preferredDocHint } = parseQuestionContext(q);
   const question = cleanedQuestion || q;
-  const intent = inferIntent(question);
+  const topic = classifyTopic(question);
+  const intent = topic.intent;
   
   const annualLeave = tryAnnualLeaveEstimator(question);
   if (annualLeave) return annualLeave;
@@ -477,13 +316,12 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
 
   const terms = tokenize(question);
   const used0 = terms.length ? terms : [question];
-  const used = expandQueryTerms(question, used0);
-
+  const used = buildTopicQueryTerms(question, used0, topic);
   const anchors = pickAnchors(used);
 
   const { sb, hits: rawHits0 } = await retrieveCandidates(question, used);
   const rawHits1 = await tryPreferDocumentHits(sb, rawHits0, preferredDocHint);
-  const rawHits = await tryPreferTopicDocumentHits(sb, rawHits1, question);
+  const rawHits = await tryPreferTopicDocumentHits(sb, rawHits1, topic.docHints);
 
   if (!rawHits.length) {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
@@ -492,30 +330,15 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   let hits = filterByAnchors(rawHits, anchors);
   if (!hits.length) hits = rawHits;
 
-  if (/휴가/.test(intent)) {
-    // ✅ table 블록(text=null)도 포함되도록 text + table_html 모두 검사
-    const filtered = hits
-      .filter((h: Row) => /휴가|연차|경조|병역의무|민방위|예비군|병가/.test(`${h.text ?? ""}
-${h.table_html ?? ""}`))
-      .filter((h: Row) => !/구독|OTT|넷플릭스|유튜브|리디북스|티빙/.test(`${h.text ?? ""}
-${h.table_html ?? ""}`));
-    if (filtered.length) hits = filtered;
-  }
-
-  hits = applyAnnualLeaveStrictFilter(question, hits);
-  hits = applyProjectAllowanceStrictFilter(question, hits);
-  hits = applyWelfareStrictFilter(question, hits);
-  hits = applyAnnualLeaveStrictFilter(question, hits);
-  hits = applyWreathSafetyFilter(question, hits);
-  hits = applyCondolenceLeaveStrictFilter(question, hits);
-  hits = applyEtcLeaveStrictFilter(question, hits);
-  hits = applyLeaveDaysSafetyFilter(question, hits);
+  hits = applyTopicFilter(hits, topic);
+  if (topic.key === "condolence_leave") hits = applyLeaveDaysSafetyFilter(question, hits);
 
   const scoreRow = makeScorer({ q: question, used, anchors });
   const bestDocId = pickBestDocId(hits, scoreRow);
   if (!bestDocId) {
     return { ok: true, answer: noResultFallback, hits: [], meta: { intent } };
   }
+
   const doc = await loadDocFilename(sb, bestDocId);
   const ctx = await buildWindowContext({ sb, bestDocId, hits, scoreRow });
 
@@ -523,7 +346,6 @@ ${h.table_html ?? ""}`));
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
   const extracted = tryExtractAnswer(question, normalizedEvidence);
-
   const draftedAnswer = extracted?.ok
     ? extracted.answer_md
     : buildSummary(intent, normalizedEvidence, question);
@@ -536,9 +358,7 @@ ${h.table_html ?? ""}`));
   });
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
-  const answer = normalizeAnswer(
-    ensureTableFirstAnswer(question, rawAnswer, normalizedEvidence)
-  );
+  const answer = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
 
   const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
 
