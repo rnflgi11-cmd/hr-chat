@@ -111,15 +111,16 @@ function isBadModelOutput(out: string, draft: string): boolean {
   return false;
 }
 
-export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<string | null> {
+export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRefineResult> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || !isLlmEnabled()) return null;
+  if (!isLlmEnabled()) return { answer: null, reason: "disabled" };
+  if (!apiKey) return { answer: null, reason: "missing_api_key" };
 
   const model = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
   const draft = cleanText(input.draftAnswer);
   const evidence = buildEvidenceSnippet(input.evidence);
 
-  if (!draft && !evidence) return null;
+  if (!draft && !evidence) return { answer: null, reason: "empty_input" };
 
   const prompt = [
     HR_RULES_PROMPT,
@@ -158,7 +159,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<string
     }
   );
 
-  if (!res.ok) return null;
+  if (!res.ok) return { answer: null, reason: "api_error" };
 
   const data = await res.json();
   const text = cleanText(
@@ -167,6 +168,16 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<string
       .join("\n")
   );
 
-  if (isBadModelOutput(text, draft)) return draft || null;
-  return text || draft || null;
+  if (isBadModelOutput(text, draft)) {
+    return { answer: draft || null, reason: "bad_output_fallback" };
+  }
+
+  const answer = text || draft || null;
+  if (!answer) return { answer: null, reason: "empty_input" };
+
+  if (normalizeForCompare(answer) === normalizeForCompare(draft)) {
+    return { answer, reason: "same_as_draft" };
+  }
+
+  return { answer, reason: "applied" };
 }
