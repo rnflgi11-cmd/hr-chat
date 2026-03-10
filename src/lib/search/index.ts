@@ -1,6 +1,6 @@
 import { retrieveCandidates } from "./retrieve";
 import { pickAnchors, tokenize } from "./query";
-import { applyTopicFilter, buildTopicQueryTerms, classifyTopic } from "./router";
+import { applyTopicFilter, buildTopicQueryTerms, classifyTopic, type TopicProfile } from "./router";
 import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
@@ -370,46 +370,22 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   return out.slice(0, max);
 }
 
-function topicParagraphFilter(topicIntent: string) {
-  if (/경조/.test(topicIntent)) {
-    return {
-      include: /(경조|결혼|조사|사망|출산|휴가일수|유의사항)/,
-      exclude: /(기타\s*휴가|민방위|예비군|병역의무|직무\s*교육|병가)/,
-    };
-  }
-
-  if (/기타휴가/.test(topicIntent)) {
-    return {
-      include: /(기타\s*휴가|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|연차\s*차감\s*없음)/,
-      exclude: /(경조|결혼|조사|사망|출산|조위금|경조금)/,
-    };
-  }
-
-  if (/안식년/.test(topicIntent)) {
-    return {
-      include: /(안식년|장기근속|포상|시행일|사용\s*절차|유의\s*사항|유효기간)/,
-      exclude: /(경조|프로젝트\s*수당|민방위|예비군)/,
-    };
-  }
-
-  return { include: /./, exclude: null as RegExp | null };
-}
-
-function buildTopicDraftAnswer(intent: string, evidence: Evidence[]): string {
+function buildTopicDraftAnswer(topic: TopicProfile, evidence: Evidence[]): string {
   const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
   const mdTable = table ? htmlTableToMarkdown(table.content_html ?? "") : "";
 
-  const { include, exclude } = topicParagraphFilter(intent);
+  const include = topic.answerInclude ?? topic.include ?? /./;
+  const exclude = topic.answerExclude ?? topic.exclude;
   const lines = evidence
     .filter((e) => e.block_type === "p")
     .map((e) => (e.content_text ?? "").replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((line) => include.test(line) && !(exclude?.test(line) ?? false))
     .filter((line) => !/^\[.*\]$/.test(line))
-    .slice(0, 8);
+    .slice(0, topic.maxBullets);
 
   const bullets = lines.map((line) => `- ${line.replace(/^[•●◊✅📌]\s*/, "")}`).join("\n");
-  const summaryTitle = intent ? `### ${intent} 안내` : "### 인사 규정 안내";
+  const summaryTitle = topic.intent ? `### ${topic.intent} 안내` : "### 인사 규정 안내";
 
   return [
     summaryTitle,
@@ -466,7 +442,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const evidenceAll = toEvidence(doc.filename, ctx);
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
-  const draftedAnswer = buildTopicDraftAnswer(intent, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
+  const draftedAnswer = buildTopicDraftAnswer(topic, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
 
 const llmRuntime = getLlmRuntimeInfo();
 

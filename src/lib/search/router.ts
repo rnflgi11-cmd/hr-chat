@@ -18,6 +18,9 @@ export type TopicProfile = {
   queryTerms: string[];
   include: RegExp | null;
   exclude: RegExp | null;
+  answerInclude: RegExp | null;
+  answerExclude: RegExp | null;
+  maxBullets: number;
   preferTable: boolean;
 };
 
@@ -36,6 +39,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["프로젝트 수당", "프로젝트수당", "지급 기준", "PM팀", "개발자", "상주 근무"],
       include: /(프로젝트\s*수당|프로젝트수당|지급\s*기준|PM팀|개발자|상주\s*근무|1일\s*\d+[\d,]*\s*원)/,
       exclude: /(경조|결혼|조사|사망|화환|안식년|연차|기타\s*휴가|병역의무)/,
+      answerInclude: /(프로젝트\s*수당|프로젝트수당|지급\s*기준|PM팀|개발자|상주\s*근무|정산|기준)/,
+      answerExclude: /(경조|결혼|조사|사망|화환|안식년|연차|기타\s*휴가|병역의무)/,
+      maxBullets: 7,
       preferTable: true,
     };
   }
@@ -48,6 +54,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["기타휴가", "기타 휴가", "병역의무", "민방위", "예비군", "직무교육", "병가"],
       include: /(기타|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|훈련\s*증명서|연차\s*차감\s*없음|사전\s*기안)/,
       exclude: /(경조|결혼|조사|사망|부고|조의|조문|출산|조위금|경조금)/,
+      answerInclude: /(기타\s*휴가|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|훈련\s*증명서|연차\s*차감\s*없음)/,
+      answerExclude: /(경조|결혼|조사|사망|부고|조의|조문|출산|조위금|경조금)/,
+      maxBullets: 8,
       preferTable: true,
     };
   }
@@ -60,6 +69,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["연차", "반차", "월차", "연차 발생", "연차 생성", "연차 기준", "연차수당", "잔여연차"],
       include: /(연차|반차|월차|연차수당|잔여\s*연차|연차\s*생성|연차\s*발생|발생\s*기준|사용\s*기준|소멸|이월)/,
       exclude: /(경조|결혼|조사|사망|병역|민방위|예비군|안식년|화환|프로젝트\s*수당)/,
+      answerInclude: /(연차|반차|월차|연차수당|잔여\s*연차|발생\s*기준|사용\s*기준|소멸|이월)/,
+      answerExclude: /(경조|결혼|조사|사망|병역|민방위|예비군|안식년|화환|프로젝트\s*수당)/,
+      maxBullets: 7,
       preferTable: true,
     };
   }
@@ -72,6 +84,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["경조휴가", "경조 휴가", "경조", "경조유형", "휴가일수"],
       include: /(경조\s*휴가|경조휴가|경조유형|조의|조문|부고|사망|결혼|휴가일수|\d+\s*일)/,
       exclude: /(안식년|선연차|프로젝트\s*수당|프로젝트수당|수당\s*정산|화환\s*신청|화환신청)/,
+      answerInclude: /(경조\s*휴가|경조휴가|경조유형|조의|조문|부고|사망|결혼|휴가일수|유의사항|첨부서류|비고)/,
+      answerExclude: /(기타\s*휴가|민방위|예비군|병역의무|직무\s*교육|병가|안식년|프로젝트\s*수당)/,
+      maxBullets: 7,
       preferTable: true,
     };
   }
@@ -84,6 +99,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["화환 신청", "화환신청서", "발주", "도착", "배송"],
       include: /(화환|발주|신청서|도착|배송)/,
       exclude: /(경조금|조위금|근속\s*2년|근속2년)/,
+      answerInclude: /(화환|발주|신청서|도착|배송|신청|절차)/,
+      answerExclude: /(경조금|조위금|근속\s*2년|근속2년)/,
+      maxBullets: 6,
       preferTable: false,
     };
   }
@@ -96,6 +114,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["복리후생", "복지", "혜택", "지원", "휴가", "수당", "경조", "화환", "안식년"],
       include: /(복리후생|복지|혜택|지원|수당|휴가|경조|화환|안식년|연차)/,
       exclude: null,
+      answerInclude: /(복리후생|복지|혜택|지원|수당|휴가|경조|화환|안식년|연차)/,
+      answerExclude: null,
+      maxBullets: 8,
       preferTable: false,
     };
   }
@@ -108,6 +129,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["안식년", "장기근속", "포상"],
       include: /(안식년|장기근속|포상|휴가일수|유효기간|사용\s*절차)/,
       exclude: /(경조|화환|프로젝트\s*수당)/,
+      answerInclude: /(안식년|장기근속|포상|시행일|휴가일수|유효기간|사용\s*절차|유의\s*사항)/,
+      answerExclude: /(경조|화환|프로젝트\s*수당)/,
+      maxBullets: 7,
       preferTable: true,
     };
   }
@@ -120,6 +144,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
       queryTerms: ["휴가", "연차", "신청", "절차"],
       include: /(휴가|연차|반차|신청|절차)/,
       exclude: /(구독|OTT|넷플릭스|유튜브|리디북스|티빙)/,
+      answerInclude: /(휴가|연차|반차|신청|절차|기준)/,
+      answerExclude: /(구독|OTT|넷플릭스|유튜브|리디북스|티빙)/,
+      maxBullets: 7,
       preferTable: false,
     };
   }
@@ -131,6 +158,9 @@ export function classifyTopic(questionRaw: string): TopicProfile {
     queryTerms: [],
     include: null,
     exclude: null,
+    answerInclude: null,
+    answerExclude: null,
+    maxBullets: 6,
     preferTable: false,
   };
 }
