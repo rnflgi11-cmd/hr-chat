@@ -370,7 +370,19 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   return out.slice(0, max);
 }
 
-function buildTopicDraftAnswer(topic: TopicProfile, evidence: Evidence[]): string {
+function lineScoreForQuestion(line: string, question: string): number {
+  const qTerms = tokenize(question).filter((t) => t.length >= 2);
+  const hay = line.toLowerCase();
+  let score = 0;
+  for (const t of qTerms) {
+    if (hay.includes(t.toLowerCase())) score += 3;
+  }
+  if (/일수|기준|절차|신청|대상|유효기간|첨부서류|비고/.test(line)) score += 2;
+  if (/문의|담당|연락처/.test(line)) score -= 2;
+  return score;
+}
+
+function buildTopicDraftAnswer(topic: TopicProfile, question: string, evidence: Evidence[]): string {
   const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
   const mdTable = table ? htmlTableToMarkdown(table.content_html ?? "") : "";
 
@@ -381,15 +393,23 @@ function buildTopicDraftAnswer(topic: TopicProfile, evidence: Evidence[]): strin
     .map((e) => (e.content_text ?? "").replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((line) => include.test(line) && !(exclude?.test(line) ?? false))
+    .filter((line) => !/^(📌|✅|■|\[).*$/.test(line))
+    .map((line) => line.replace(/^[•●◊✅📌■]\s*/, ""))
+    .filter((line) => line.length >= 4)
+    .filter((line) => !/^문의[:：]?/.test(line))
     .filter((line) => !/^\[.*\]$/.test(line))
-    .slice(0, topic.maxBullets);
+    .map((line) => ({ line, score: lineScoreForQuestion(line, question) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topic.maxBullets)
+    .map((x) => x.line);
 
-  const bullets = lines.map((line) => `- ${line.replace(/^[•●◊✅📌]\s*/, "")}`).join("\n");
+  const bullets = lines.map((line) => `- ${line}`).join("\n");
   const summaryTitle = topic.intent ? `### ${topic.intent} 안내` : "### 인사 규정 안내";
+  const summaryLine = `${topic.intent} 관련 핵심 기준을 정리해 드립니다.`;
 
   return [
     summaryTitle,
-    mdTable ? "" : "핵심 기준을 아래와 같이 안내드립니다.",
+    summaryLine,
     bullets,
     mdTable ? "\n### 관련 표\n" : "",
     mdTable,
@@ -442,7 +462,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const evidenceAll = toEvidence(doc.filename, ctx);
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
-  const draftedAnswer = buildTopicDraftAnswer(topic, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
+  const draftedAnswer = buildTopicDraftAnswer(topic, question, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
 
 const llmRuntime = getLlmRuntimeInfo();
 
