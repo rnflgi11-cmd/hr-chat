@@ -431,7 +431,9 @@ const llmResult = await refineAnswerWithLlm({
       llm_has_api_key: llmRuntime.hasApiKey,
       llm_model: llmRuntime.model,
       llm_applied: llmApplied,
-      llm_reason: llmResult.reason,
+      llm_reason: llmResult?.reason,
+      llm_status: llmResult?.status,
+      llm_error: llmResult?.error,
       build_ref: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? process.env.NODE_ENV,
     },
   };

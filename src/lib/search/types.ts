@@ -25,6 +25,8 @@ export type SearchMeta = {
   llm_model?: string;
   llm_applied?: boolean;
   llm_reason?: string;
+  llm_status?: number;
+  llm_error?: string;
   build_ref?: string;
 };
 

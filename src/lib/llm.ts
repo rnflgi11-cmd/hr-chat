@@ -18,6 +18,8 @@ export type LlmRefineResult = {
     | "bad_output_fallback"
     | "same_as_draft"
     | "applied";
+  status?: number;
+  error?: string;
 };
 
 const STRICT_FALLBACK =
@@ -134,7 +136,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "evidence:",
     evidence || "(없음)",
     "",
-    "출력 지시:",
+      "출력 지시:",
     "1) 최종 답변 Markdown 본문만 출력",
     "2) draft answer의 핵심 수치/절차/표를 보존하면서 문장을 자연스럽게 정리",
     "2-1) draft answer에 있는 절차/순서 번호는 원문 순서를 유지",
@@ -143,23 +145,42 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
   ].join("\n");
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}` +
+    `:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0,
+      topP: 0.1,
+      maxOutputTokens: 1024,
+    },
+  };
+
+  let res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok && (res.status === 429 || res.status >= 500)) {
+    await new Promise((r) => setTimeout(r, 250));
+    res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0,
-          topP: 0.1,
-          maxOutputTokens: 1024,
-        },
-      }),
-    }
-  );
+      body: JSON.stringify(payload),
+    });
+  }
 
-  if (!res.ok) return { answer: null, reason: "api_error" };
+  if (!res.ok) {
+    const errText = cleanText(await res.text());
+    return {
+      answer: null,
+      reason: "api_error",
+      status: res.status,
+      error: errText.slice(0, 240) || "gemini_api_error",
+    };
+  }
 
   const data = await res.json();
   const text = cleanText(
