@@ -239,7 +239,15 @@ function removeTableEchoLines(answer: string, markdownTable: string): string {
 
 function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: Evidence[]): string {
   if (!preferTable) return answer;
-  if (/^\|.*\|$/m.test(answer)) return answer;
+
+  if (/^\|.*\|$/m.test(answer)) {
+    const tableBlock = answer
+      .split("\n")
+      .filter((line) => /^\|.*\|$/.test(line.trim()))
+      .join("\n");
+    if (!tableBlock) return answer;
+    return removeTableEchoLines(removeRepeatedListBelowTable(answer), tableBlock);
+  }
 
   const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
   if (!table) return answer;

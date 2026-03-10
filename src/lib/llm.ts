@@ -95,6 +95,41 @@ function normalizeForCompare(s: string): string {
     .trim();
 }
 
+function normalizeModelName(model: string): string {
+  return (model ?? "").replace(/^models\//, "").trim();
+}
+
+function buildGenerateEndpoint(apiVersion: "v1" | "v1beta", model: string, apiKey: string): string {
+  return (
+    `https://generativelanguage.googleapis.com/${apiVersion}/models/${encodeURIComponent(normalizeModelName(model))}` +
+    `:generateContent?key=${encodeURIComponent(apiKey)}`
+  );
+}
+
+async function resolveSupportedModel(apiKey: string, preferred: string): Promise<string> {
+  const versions: Array<"v1" | "v1beta"> = ["v1", "v1beta"];
+  const wanted = normalizeModelName(preferred);
+
+  for (const v of versions) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/${v}/models?key=${encodeURIComponent(apiKey)}`);
+    if (!res.ok) continue;
+    const data = await res.json();
+    const models: Array<{ name?: string; supportedGenerationMethods?: string[] }> = data?.models ?? [];
+    const gen = models.filter((m) => (m.supportedGenerationMethods ?? []).includes("generateContent"));
+    if (!gen.length) continue;
+
+    const exact = gen.find((m) => normalizeModelName(m.name ?? "") === wanted);
+    if (exact?.name) return normalizeModelName(exact.name);
+
+    const preferredFlash = gen.find((m) => /flash/i.test(normalizeModelName(m.name ?? "")));
+    if (preferredFlash?.name) return normalizeModelName(preferredFlash.name);
+
+    if (gen[0]?.name) return normalizeModelName(gen[0].name);
+  }
+
+  return wanted;
+}
+
 function isBadModelOutput(out: string, draft: string): boolean {
   const text = cleanText(out);
   if (!text) return true;
@@ -118,7 +153,8 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
   if (!isLlmEnabled()) return { answer: null, reason: "disabled" };
   if (!apiKey) return { answer: null, reason: "missing_api_key" };
 
-  const model = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
+  const preferredModel = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
+  const model = await resolveSupportedModel(apiKey, preferredModel);
   const draft = cleanText(input.draftAnswer);
   const evidence = buildEvidenceSnippet(input.evidence);
 
@@ -145,9 +181,8 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
   ].join("\n");
 
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}` +
-    `:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const endpointV1 = buildGenerateEndpoint("v1", model, apiKey);
+  const endpointV1beta = buildGenerateEndpoint("v1beta", model, apiKey);
   const payload = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
@@ -157,15 +192,24 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     },
   };
 
-  let res = await fetch(endpoint, {
+  let res = await fetch(endpointV1, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
+  if (!res.ok && res.status === 404) {
+    res = await fetch(endpointV1beta, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
   if (!res.ok && (res.status === 429 || res.status >= 500)) {
     await new Promise((r) => setTimeout(r, 250));
-    res = await fetch(endpoint, {
+    const retryEndpoint = res.status === 404 ? endpointV1beta : endpointV1;
+    res = await fetch(retryEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
