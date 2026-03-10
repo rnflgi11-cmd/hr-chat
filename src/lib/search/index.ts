@@ -5,7 +5,6 @@ import { filterByAnchors, makeScorer, pickBestDocId } from "./rank";
 import { buildWindowContext, loadDocFilename, toEvidence } from "./context";
 import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence, Row } from "./types";
-import { extractAnswerFromBlocks as tryExtractAnswer } from "./extract";
 import { getLlmRuntimeInfo, refineAnswerWithLlm } from "@/lib/llm";
 
 type QuestionContext = {
@@ -371,6 +370,59 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   return out.slice(0, max);
 }
 
+function topicParagraphFilter(topicIntent: string) {
+  if (/경조/.test(topicIntent)) {
+    return {
+      include: /(경조|결혼|조사|사망|출산|휴가일수|유의사항)/,
+      exclude: /(기타\s*휴가|민방위|예비군|병역의무|직무\s*교육|병가)/,
+    };
+  }
+
+  if (/기타휴가/.test(topicIntent)) {
+    return {
+      include: /(기타\s*휴가|병역의무|민방위|예비군|직무\s*교육|교육\s*참석|병가|연차\s*차감\s*없음)/,
+      exclude: /(경조|결혼|조사|사망|출산|조위금|경조금)/,
+    };
+  }
+
+  if (/안식년/.test(topicIntent)) {
+    return {
+      include: /(안식년|장기근속|포상|시행일|사용\s*절차|유의\s*사항|유효기간)/,
+      exclude: /(경조|프로젝트\s*수당|민방위|예비군)/,
+    };
+  }
+
+  return { include: /./, exclude: null as RegExp | null };
+}
+
+function buildTopicDraftAnswer(intent: string, evidence: Evidence[]): string {
+  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
+  const mdTable = table ? htmlTableToMarkdown(table.content_html ?? "") : "";
+
+  const { include, exclude } = topicParagraphFilter(intent);
+  const lines = evidence
+    .filter((e) => e.block_type === "p")
+    .map((e) => (e.content_text ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => include.test(line) && !(exclude?.test(line) ?? false))
+    .filter((line) => !/^\[.*\]$/.test(line))
+    .slice(0, 8);
+
+  const bullets = lines.map((line) => `- ${line.replace(/^[•●◊✅📌]\s*/, "")}`).join("\n");
+  const summaryTitle = intent ? `### ${intent} 안내` : "### 인사 규정 안내";
+
+  return [
+    summaryTitle,
+    mdTable ? "" : "핵심 기준을 아래와 같이 안내드립니다.",
+    bullets,
+    mdTable ? "\n### 관련 표\n" : "",
+    mdTable,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
 export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const { cleanedQuestion, preferredDocHint } = parseQuestionContext(q);
   const question = cleanedQuestion || q;
@@ -414,10 +466,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const evidenceAll = toEvidence(doc.filename, ctx);
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
-  const extracted = tryExtractAnswer(question, normalizedEvidence);
-  const draftedAnswer = extracted?.ok
-    ? extracted.answer_md
-    : buildSummary(intent, normalizedEvidence, question);
+  const draftedAnswer = buildTopicDraftAnswer(intent, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
 
 const llmRuntime = getLlmRuntimeInfo();
 
