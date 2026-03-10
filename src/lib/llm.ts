@@ -16,6 +16,7 @@ export type LlmRefineResult = {
     | "empty_input"
     | "api_error"
     | "bad_output_fallback"
+    | "truncated_fallback"
     | "same_as_draft"
     | "applied";
   status?: number;
@@ -148,6 +149,24 @@ function isBadModelOutput(out: string, draft: string): boolean {
   return false;
 }
 
+function isLikelyTruncatedOutput(out: string): boolean {
+  const text = cleanText(out);
+  if (!text) return true;
+
+  const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const last = lines[lines.length - 1] ?? "";
+  if (!last) return true;
+
+  if (/\d{4}\s*년\s*\d{1,2}\s*월$/.test(last)) return true;
+  if (/\d{1,2}\s*월\s*\d{1,2}\s*일$/.test(last)) return true;
+  if (/^(##+\s*)?[가-힣A-Za-z0-9\s]+:$/.test(last)) return true;
+
+  const endsCleanly = /[.!?。…]|니다$|습니다$|요$/.test(last);
+  if (!endsCleanly && last.length <= 20) return true;
+
+  return false;
+}
+
 export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRefineResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!isLlmEnabled()) return { answer: null, reason: "disabled" };
@@ -179,6 +198,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "3) 같은 의미 반복 문장은 제거",
     "4) 답변 구조: 핵심요약 1문장 + 상세 bullet 2~6개 + (가능하면) 주의/예외 1~2개",
     "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
+    "6) 문장을 중간에 끊지 말고, 마지막 문장은 반드시 완결형(예: ~입니다/~합니다)으로 끝낼 것",
   ].join("\n");
 
   const endpointV1 = buildGenerateEndpoint("v1", model, apiKey);

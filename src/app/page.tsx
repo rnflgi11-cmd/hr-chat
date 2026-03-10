@@ -70,7 +70,7 @@ export default function LoginPage() {
                 </div>
               </div>
               <div>
-                <div className="text-sm text-white/60">Covision Internal</div>
+                <div className="text-sm text-white/60">Covision Coporation</div>
                 <div className="text-base font-semibold">코비전 HR 규정 챗봇</div>
               </div>
             </div>
@@ -88,9 +88,9 @@ export default function LoginPage() {
 
             <div className="mt-8 grid gap-3 sm:grid-cols-2">
               <FeatureCard title="출처 제공" desc="규정 파일/근거 문단을 함께 표시" />
-              <FeatureCard title="권한 기반" desc="인사팀 전용 접근 제어" />
+              <FeatureCard title="권한 기반" desc="인사팀 테스트" />
               <FeatureCard title="PWA 설치" desc="홈 화면에 추가해 앱처럼 사용" />
-              <FeatureCard title="외부 데모" desc="깔끔한 UI로 대외 시연" />
+              <FeatureCard title="외부 데모" desc="깔끔한 추천 UI 적용" />
             </div>
           </div>
 
@@ -105,7 +105,7 @@ export default function LoginPage() {
                   </div>
                 </div>
                 <div className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-300/20">
-                  HR Only
+                  HR
                 </div>
               </div>
 
