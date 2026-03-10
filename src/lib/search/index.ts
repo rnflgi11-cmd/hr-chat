@@ -186,11 +186,28 @@ function removeRepeatedListBelowTable(answer: string): string {
       continue;
     }
 
-    if (/^[\-•]?\s*[^\n]{1,24}\s*[—-]\s*[^\n]+$/.test(t)) continue;
+    if (/^[\-•]?\s*[^\n]{1,60}\s*[—–-]\s*[^\n]+$/.test(t)) continue;
+    if ((t.match(/[—–-]/g) ?? []).length >= 2 && t.length <= 120) continue;
     out.push(line);
   }
 
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function enrichTooShortAnswer(answer: string, fallbackDetailed: string, preferTable: boolean, evidence: Evidence[]): string {
+  const compact = (answer ?? "").replace(/\s+/g, " ").trim();
+  const nonTableLines = (answer ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .filter((x) => x && !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x));
+
+  const tooShort = compact.length < 80 || nonTableLines.length <= 1;
+  if (!tooShort) return answer;
+
+  const detailed = (fallbackDetailed ?? "").trim();
+  if (!detailed) return answer;
+
+  return normalizeAnswer(ensureTableFirstAnswer(preferTable, detailed, evidence));
 }
 
 function normalizeLooseText(s: string): string {
@@ -422,7 +439,9 @@ const llmResult = await refineAnswerWithLlm({
 );
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
-  const answer = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
+  const normalized = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
+  const detailedFallback = buildSummary(intent, normalizedEvidence, question);
+  const answer = enrichTooShortAnswer(normalized, detailedFallback, topic.preferTable, normalizedEvidence);
 
   const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
 
