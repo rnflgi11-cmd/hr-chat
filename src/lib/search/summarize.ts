@@ -62,11 +62,11 @@ export function buildSummary(intent: string, evidenceAll: Evidence[], q: string)
     : 0;
 
   const start = Math.max(0, bestIdx - 2);
-  const selected = paragraphs.slice(start, start + 12);
+  const selected = paragraphs.slice(start, start + 14);
   const head = selected[0]?.display ?? "";
   const conclusion = head
-    ? `질문하신 ${intent || "규정"} 내용은 다음 기준으로 확인됩니다: ${clampParagraph(head, 140)}`
+    ? `${intent || "해당 규정"}의 핵심 결론은 ${clampParagraph(head, 180)}입니다.`
     : `${intent || "해당 규정"}은 아래 근거로 확인됩니다.`;
 
-  return [conclusion, ...selected.slice(1, 6).map((x) => `- ${clampParagraph(x.display)}`)].join("\n");
+  return [conclusion, ...selected.slice(1, 7).map((x) => `- ${clampParagraph(x.display, 260)}`)].join("\n");
 }

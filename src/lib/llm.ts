@@ -169,6 +169,20 @@ function isLikelyTruncatedOutput(out: string): boolean {
   return false;
 }
 
+function isTooShortForType(out: string, questionType: LlmRefineInput["questionType"]): boolean {
+  const text = cleanText(out);
+  if (!text) return true;
+
+  const plainLines = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const sentenceCount = (text.match(/[.!?。…]|니다\b|습니다\b|해요\b/g) ?? []).length;
+  const nonTableLines = plainLines.filter((x) => !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x));
+
+  if (questionType === "direct") return sentenceCount < 2 || nonTableLines.length < 2;
+  if (questionType === "explain") return nonTableLines.length < 3;
+  if (questionType === "list") return nonTableLines.length < 2;
+  return false;
+}
+
 export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRefineResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!isLlmEnabled()) return { answer: null, reason: "disabled" };
@@ -196,9 +210,10 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "2) direct 유형: 첫 문장에서 결론을 말하고, 이어서 2~4문장으로 자연스럽게 설명",
     "3) list 유형: 짧은 서문 1문장 후, 필요한 경우에만 목록 또는 표를 사용",
     "4) explain 유형: 결론 1문장 + 핵심 기준 2~5개(짧은 bullet 또는 문단)",
-    "5) 질문과 직접 관련 없는 항목/제도는 제외",
-    "6) 출처 표기는 선택 사항이며, 강제로 넣지 않아도 됨",
-    "7) 문장을 중간에 끊지 말고 완결형으로 끝낼 것",
+    "5) 표를 쓴 경우: 표 앞 1문장 + 표 뒤 핵심 설명 2~4개를 반드시 포함",
+    "6) 질문과 직접 관련 없는 항목/제도는 제외",
+    "7) 출처 표기는 선택 사항이며, 강제로 넣지 않아도 됨",
+    "8) 문장을 중간에 끊지 말고 완결형으로 끝낼 것",
   ].join("\n");
 
   const endpointV1 = buildGenerateEndpoint("v1", model, apiKey);
@@ -253,7 +268,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
       .join("\n")
   );
 
-  if (isBadModelOutput(text) || isLikelyTruncatedOutput(text)) {
+  if (isBadModelOutput(text) || isLikelyTruncatedOutput(text) || isTooShortForType(text, input.questionType)) {
     return { answer: fallbackDraft || null, reason: "bad_output_fallback" };
   }
 

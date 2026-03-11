@@ -215,8 +215,16 @@ function shouldUseSummaryFallback(answer: string, llmApplied: boolean): boolean 
   const compact = (answer ?? "").replace(/\s+/g, " ").trim();
   if (!compact) return true;
   if (compact.length < 20) return true;
-  if (!llmApplied && compact.length < 48) return true;
+  if (compact.length < 40) return true;
+  if (!llmApplied && compact.length < 56) return true;
   return false;
+}
+
+function hasOnlyTable(answer: string): boolean {
+  const lines = (answer ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) return true;
+  const nonTable = lines.filter((x) => !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x));
+  return nonTable.length <= 1;
 }
 
 function normalizeLooseText(s: string): string {
@@ -478,8 +486,10 @@ function buildTopicDraftAnswer(topic: TopicProfile, question: string, evidence: 
     .slice(0, topic.maxBullets)
     .map((x) => x.line);
 
-  const lead = lines[0] ? `${lines[0]}` : `${topic.intent} 기준은 사내 규정 근거로 확인됩니다.`;
-  const support = lines.slice(1, 4).map((line) => `- ${line}`).join("\n");
+  const lead = lines[0]
+    ? `핵심은 ${lines[0]}`
+    : `${topic.intent} 기준은 사내 규정 근거로 확인됩니다.`;
+  const support = lines.slice(1, 5).map((line) => `- ${line}`).join("\n");
 
   return [lead, support, mdTable ? `참고 가능한 기준표입니다.\n${mdTable}` : ""]
     .filter(Boolean)
@@ -558,14 +568,15 @@ const llmResult = await refineAnswerWithLlm({
 );
 
   const rawAnswer = (llmAnswer ?? "").trim() || fallbackDraft || noResultFallback;
-  const normalized = normalizeAnswer(
+  const normalized0 = normalizeAnswer(
     questionType === "list" ? ensureTableFirstAnswer(topic.preferTable, rawAnswer, selectedEvidence) : rawAnswer
   );
+  const normalized = hasOnlyTable(normalized0)
+    ? normalizeAnswer([buildSummary(intent, selectedEvidence, question), normalized0].filter(Boolean).join("\n\n"))
+    : normalized0;
   const detailedFallback = buildSummary(intent, selectedEvidence, question);
   const answer = shouldUseSummaryFallback(normalized, llmApplied)
-    ? (llmApplied
-      ? normalized
-      : enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence))
+    ? enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
     : normalized;
 
   const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 16);
