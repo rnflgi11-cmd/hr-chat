@@ -28,7 +28,7 @@ const STRICT_FALLBACK =
   "죄송합니다. 해당 내용은 현재 규정집에서 확인할 수 없습니다. 정확한 확인을 위해 인사팀([02-6965-3100] 또는 [MS@covision.co.kr])으로 문의해 주시기 바랍니다.";
 
 const HR_RULES_PROMPT = [
-  "당신은 코비젼 인사팀 HR 안내 담당자입니다.",
+  "당신은 코비젼 인사팀 선임 HR 안내 담당자입니다.",
   "반드시 evidence 범위 안에서만 답변하세요.",
   "근거에 없는 내용/수치/표를 생성하지 마세요.",
   "질문과 무관한 제도, 표, 안내문은 절대 섞지 마세요.",
@@ -40,6 +40,29 @@ const HR_RULES_PROMPT = [
   "표를 사용하는 경우에도 표만 단독으로 내지 말고, 표 앞에 짧은 설명 1문장을 먼저 쓰세요.",
   `근거가 부족하면 정확히 아래 문구만 출력: ${STRICT_FALLBACK}`,
 ].join("\n");
+
+function buildFallbackFromDraft(draft: string, questionType: LlmRefineInput["questionType"]): string {
+  const lines = draft.split("\n").map((x) => x.trim()).filter(Boolean);
+  const tableLines = lines.filter((x) => /^\|.*\|$/.test(x) || /^[:\-\s|]+$/.test(x));
+  const textLines = lines.filter((x) => !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x));
+
+  if (questionType === "direct") {
+    const lead = textLines[0] ?? "질문하신 내용은 사내 규정 기준으로 확인됩니다.";
+    const body = textLines.slice(1, 3);
+    return [lead, ...body].join("\n\n").trim();
+  }
+
+  if (questionType === "explain") {
+    const lead = textLines[0] ?? "질문하신 기준은 다음과 같이 적용됩니다.";
+    const bullets = textLines.slice(1, 5).map((x) => `- ${x.replace(/^[-*]\s*/, "")}`);
+    return [lead, ...bullets].join("\n").trim();
+  }
+
+  const lead = textLines[0] ?? "질문하신 항목은 아래와 같습니다.";
+  const bullets = textLines.slice(1, 4).map((x) => `- ${x.replace(/^[-*]\s*/, "")}`);
+  const table = tableLines.length ? ["아래 표는 관련 항목만 정리한 내용입니다.", ...tableLines] : [];
+  return [lead, ...bullets, ...table].join("\n\n").trim();
+}
 
 function cleanText(s: string | null | undefined): string {
   return (s ?? "")
@@ -191,6 +214,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
   const preferredModel = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
   const model = await resolveSupportedModel(apiKey, preferredModel);
   const fallbackDraft = cleanText(input.fallbackDraft);
+  const fallbackDetailed = buildFallbackFromDraft(fallbackDraft, input.questionType);
   const evidence = buildEvidenceSnippet(input.evidence);
 
   if (!evidence) return { answer: null, reason: "empty_input" };
@@ -269,10 +293,10 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
   );
 
   if (isBadModelOutput(text) || isLikelyTruncatedOutput(text) || isTooShortForType(text, input.questionType)) {
-    return { answer: fallbackDraft || null, reason: "bad_output_fallback" };
+    return { answer: fallbackDetailed || fallbackDraft || null, reason: "bad_output_fallback" };
   }
 
-  const answer = text || fallbackDraft || null;
+  const answer = text || fallbackDetailed || fallbackDraft || null;
   if (!answer) return { answer: null, reason: "empty_input" };
 
   if (fallbackDraft && normalizeForCompare(answer) === normalizeForCompare(fallbackDraft)) {

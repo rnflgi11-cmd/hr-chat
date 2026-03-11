@@ -465,7 +465,7 @@ function lineScoreForQuestion(line: string, question: string): number {
   return score;
 }
 
-function buildTopicDraftAnswer(topic: TopicProfile, question: string, evidence: Evidence[]): string {
+function buildTopicDraftAnswer(topic: TopicProfile, questionType: QuestionType, question: string, evidence: Evidence[]): string {
   const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
   const mdTable = table ? htmlTableToMarkdown(table.content_html ?? "") : "";
 
@@ -486,12 +486,30 @@ function buildTopicDraftAnswer(topic: TopicProfile, question: string, evidence: 
     .slice(0, topic.maxBullets)
     .map((x) => x.line);
 
-  const lead = lines[0]
-    ? `핵심은 ${lines[0]}`
-    : `${topic.intent} 기준은 사내 규정 근거로 확인됩니다.`;
-  const support = lines.slice(1, 5).map((line) => `- ${line}`).join("\n");
+  const deduped = Array.from(new Set(lines));
+  const leadBase = deduped[0] ?? `${topic.intent} 관련 기준은 사내 규정 근거로 확인됩니다.`;
+  const details = deduped.slice(1, 5);
 
-  return [lead, support, mdTable ? `참고 가능한 기준표입니다.\n${mdTable}` : ""]
+  if (questionType === "direct") {
+    const sentence1 = `${leadBase}`;
+    const sentence2 = details[0] ? `${details[0]}` : "관련 적용 조건은 내부 규정에 따라 확인됩니다.";
+    const sentence3 = details[1] ? `${details[1]}` : "세부 기준은 신청 상황에 따라 달라질 수 있습니다.";
+    return [sentence1, sentence2, sentence3].join("\n\n").trim();
+  }
+
+  if (questionType === "explain") {
+    return [
+      `${leadBase}`,
+      ...details.slice(0, 4).map((line) => `- ${line}`),
+    ].join("\n").trim();
+  }
+
+  const lead = `${topic.intent} 관련 핵심 항목은 다음과 같습니다.`;
+  const support = details.slice(0, 4).map((line) => `- ${line}`).join("\n");
+  const tableIntro = mdTable ? "아래 표는 질문과 직접 관련된 항목만 정리한 것입니다." : "";
+  const afterTable = details.slice(0, 3).map((line) => `- ${line}`).join("\n");
+
+  return [lead, support, mdTable ? `${tableIntro}\n${mdTable}` : "", mdTable ? afterTable : ""]
     .filter(Boolean)
     .join("\n\n")
     .trim();
@@ -545,7 +563,7 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const questionType = detectQuestionType(question);
   const selectedEvidence = filterEvidenceForQuestion(normalizedEvidence, question, topic);
 
-  const fallbackDraft = buildTopicDraftAnswer(topic, question, selectedEvidence) || buildSummary(intent, selectedEvidence, question);
+  const fallbackDraft = buildTopicDraftAnswer(topic, questionType, question, selectedEvidence) || buildSummary(intent, selectedEvidence, question, questionType);
 
 const llmRuntime = getLlmRuntimeInfo();
 
@@ -572,9 +590,9 @@ const llmResult = await refineAnswerWithLlm({
     questionType === "list" ? ensureTableFirstAnswer(topic.preferTable, rawAnswer, selectedEvidence) : rawAnswer
   );
   const normalized = hasOnlyTable(normalized0)
-    ? normalizeAnswer([buildSummary(intent, selectedEvidence, question), normalized0].filter(Boolean).join("\n\n"))
+    ? normalizeAnswer([buildSummary(intent, selectedEvidence, question, questionType), normalized0].filter(Boolean).join("\n\n"))
     : normalized0;
-  const detailedFallback = buildSummary(intent, selectedEvidence, question);
+  const detailedFallback = buildSummary(intent, selectedEvidence, question, questionType);
   const answer = shouldUseSummaryFallback(normalized, llmApplied)
     ? enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
     : normalized;

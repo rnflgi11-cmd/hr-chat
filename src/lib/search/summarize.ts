@@ -1,6 +1,8 @@
 // lib/search/summarize.ts
 import type { Evidence } from "./types";
 
+type QuestionType = "direct" | "list" | "explain";
+
 function normalizeForScore(s: string) {
   return (s ?? "").replace(/\s+/g, " ").trim();
 }
@@ -38,13 +40,33 @@ function clampParagraph(s: string, max = 700) {
   return `${s.slice(0, max).trimEnd()}…`;
 }
 
-export function buildSummary(intent: string, evidenceAll: Evidence[], q: string) {
+function cleanLine(line: string): string {
+  return normalizeForDisplay(line)
+    .replace(/^[•●◊✅📌■-]\s*/, "")
+    .replace(/^문의[:：]?.*$/g, "")
+    .replace(/^(제목|안내|참고)[:：].*$/g, "")
+    .trim();
+}
+
+function dedupeLines(lines: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = line.toLowerCase().replace(/\s+/g, "").replace(/[,:：·•()\[\]{}"'`.-]/g, "");
+    if (!line || key.length < 8 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+export function buildSummary(intent: string, evidenceAll: Evidence[], q: string, questionType: QuestionType = "direct") {
   const terms = tokenize(q);
 
   const paragraphs = evidenceAll
     .filter((e) => e.block_type === "p")
     .map((e, idx) => {
-      const display = normalizeForDisplay(e.content_text ?? "");
+      const display = cleanLine(e.content_text ?? "");
       return {
         idx,
         display,
@@ -62,11 +84,27 @@ export function buildSummary(intent: string, evidenceAll: Evidence[], q: string)
     : 0;
 
   const start = Math.max(0, bestIdx - 2);
-  const selected = paragraphs.slice(start, start + 14);
-  const head = selected[0]?.display ?? "";
-  const conclusion = head
-    ? `${intent || "해당 규정"}의 핵심 결론은 ${clampParagraph(head, 180)}입니다.`
-    : `${intent || "해당 규정"}은 아래 근거로 확인됩니다.`;
+  const selected = dedupeLines(paragraphs.slice(start, start + 14).map((x) => x.display)).slice(0, 7);
+  const head = selected[0] ?? "";
+  const tail = selected.slice(1);
 
-  return [conclusion, ...selected.slice(1, 7).map((x) => `- ${clampParagraph(x.display, 260)}`)].join("\n");
+  if (questionType === "list") {
+    const summary = head
+      ? `${intent || "해당 항목"}은 아래 핵심 항목으로 확인됩니다.`
+      : `${intent || "해당 항목"}의 핵심 목록은 다음과 같습니다.`;
+    return [summary, ...tail.slice(0, 5).map((x) => `- ${clampParagraph(x, 240)}`)].join("\n");
+  }
+
+  if (questionType === "explain") {
+    const conclusion = head
+      ? `${intent || "해당 규정"}의 기준은 ${clampParagraph(head, 160)}입니다.`
+      : `${intent || "해당 규정"}의 기준은 아래와 같습니다.`;
+    const basis = tail.slice(0, 4).map((x) => `- ${clampParagraph(x, 240)}`);
+    return [conclusion, ...basis].join("\n");
+  }
+
+  const para1 = head ? `${intent || "해당 규정"}은 ${clampParagraph(head, 180)}.` : `${intent || "해당 규정"}은 아래 근거로 확인됩니다.`;
+  const para2 = tail[0] ? `${clampParagraph(tail[0], 220)}.` : "";
+  const para3 = tail[1] ? `${clampParagraph(tail[1], 220)}.` : "";
+  return [para1, para2, para3].filter(Boolean).join("\n\n");
 }
