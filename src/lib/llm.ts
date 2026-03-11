@@ -6,6 +6,7 @@ type LlmRefineInput = {
   draftAnswer: string;
   intent: string;
   evidence: Evidence[];
+  questionType: "direct" | "list" | "explain";
 };
 
 export type LlmRefineResult = {
@@ -28,14 +29,14 @@ const STRICT_FALLBACK =
 
 const HR_RULES_PROMPT = [
   "당신은 코비젼 인사팀 HR 안내 담당자입니다.",
-  "반드시 evidence와 draft answer 범위 안에서만 답변하세요.",
+  "반드시 evidence 범위 안에서만 답변하세요.",
   "근거에 없는 내용/수치/표를 생성하지 마세요.",
-  "질문과 무관한 운영규칙 문구를 출력하지 마세요.",
+  "질문과 무관한 제도, 표, 안내문은 절대 섞지 마세요.",
   "내부 판단 과정은 절대 출력하지 마세요.",
   "답변은 자연스러운 한국어 존댓말로 작성하세요.",
-  "단답형으로 끝내지 말고, 질문 의도에 맞는 핵심 설명을 포함하세요.",
-  "draft answer의 항목 순서(제목/불릿/절차)를 임의로 바꾸지 마세요.",
-  "표 근거가 있으면 표를 우선 제시하고, 이어 핵심 해설을 2~6개 bullet로 정리하세요.",
+  "첫 문장에서 질문의 결론을 바로 말하세요.",
+  "제목(예: ### 안내), 담당자 문의 문구, 같은 의미 반복 문장을 넣지 마세요.",
+  "표는 질문이 목록/기준 비교를 요구할 때만 사용하고, 관련 행만 최소로 제시하세요.",
   `근거가 부족하면 정확히 아래 문구만 출력: ${STRICT_FALLBACK}`,
 ].join("\n");
 
@@ -62,7 +63,7 @@ function stripHtmlToText(html: string): string {
 
 function buildEvidenceSnippet(evidence: Evidence[]): string {
   return evidence
-    .slice(0, 12)
+    .slice(0, 20)
     .map((e, i) => {
       const text = cleanText(e.content_text);
       const html = cleanText(e.content_html);
@@ -184,21 +185,22 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "",
     `질문: ${input.question}`,
     `의도: ${input.intent}`,
+    `질문유형: ${input.questionType}`,
     "",
-    "draft answer(최우선 보존 대상):",
+    "draft answer(참고용):",
     draft || "(없음)",
     "",
     "evidence:",
     evidence || "(없음)",
     "",
-      "출력 지시:",
+    "출력 지시:",
     "1) 최종 답변 Markdown 본문만 출력",
-    "2) draft answer의 핵심 수치/절차/표를 보존하면서 문장을 자연스럽게 정리",
-    "2-1) draft answer에 있는 절차/순서 번호는 원문 순서를 유지",
-    "3) 같은 의미 반복 문장은 제거",
-    "4) 답변 구조: 핵심요약 1문장 + 상세 bullet 2~6개 + (가능하면) 주의/예외 1~2개",
-    "5) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
-    "6) 문장을 중간에 끊지 말고, 마지막 문장은 반드시 완결형(예: ~입니다/~합니다)으로 끝낼 것",
+    "2) direct 유형: 첫 문장 결론 + 핵심 bullet 1~4개",
+    "3) list 유형: 첫 문장 결론 + bullet 목록(또는 필요한 경우에만 표)",
+    "4) explain 유형: 첫 문장 결론 + 근거 bullet 2~6개",
+    "5) 질문과 직접 관련 없는 항목/제도는 제외",
+    "6) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
+    "7) 문장을 중간에 끊지 말고 완결형으로 끝낼 것",
   ].join("\n");
 
   const endpointV1 = buildGenerateEndpoint("v1", model, apiKey);

@@ -38,42 +38,6 @@ function clampParagraph(s: string, max = 700) {
   return `${s.slice(0, max).trimEnd()}…`;
 }
 
-function htmlTableToMarkdown(html: string): string {
-  const rows = Array.from(html.matchAll(/<tr[\s\S]*?<\/tr>/gi)).map((m) => m[0]);
-  if (!rows.length) return "";
-
-  const parsed = rows
-    .map((row) =>
-      Array.from(row.matchAll(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi)).map((m) =>
-        normalizeForDisplay(
-          (m[2] ?? "")
-            .replace(/<br\s*\/?>/gi, " ")
-            .replace(/<[^>]+>/g, " ")
-            .replace(/&nbsp;/gi, " ")
-            .replace(/&amp;/gi, "&")
-            .replace(/\|/g, "\\|")
-        )
-      )
-    )
-    .filter((cells) => cells.some(Boolean));
-
-  if (!parsed.length) return "";
-  const width = Math.max(...parsed.map((r) => r.length));
-  const normalized = parsed.map((r) => Array.from({ length: width }, (_, i) => r[i] ?? ""));
-
-  const hasHeader = /<th[\s\S]*?>/i.test(rows[0]);
-  const header = hasHeader
-    ? normalized[0]
-    : Array.from({ length: width }, (_, i) => `항목${i + 1}`);
-  const body = hasHeader ? normalized.slice(1) : normalized;
-
-  const head = `| ${header.join(" | ")} |`;
-  const divider = `| ${header.map(() => "---").join(" | ")} |`;
-  const bodyLines = body.map((r) => `| ${r.join(" | ")} |`);
-
-  return [head, divider, ...bodyLines].join("\n");
-}
-
 export function buildSummary(intent: string, evidenceAll: Evidence[], q: string) {
   const terms = tokenize(q);
 
@@ -89,12 +53,7 @@ export function buildSummary(intent: string, evidenceAll: Evidence[], q: string)
     })
     .filter((x) => x.display.length > 0);
 
-  const tableMarkdown = evidenceAll
-    .filter((e) => e.block_type === "table_html")
-    .map((e) => htmlTableToMarkdown(e.content_html ?? ""))
-    .find(Boolean);
-
-  if (!paragraphs.length && !tableMarkdown) return "";
+  if (!paragraphs.length) return "";
 
   const bestIdx = paragraphs.length
     ? paragraphs.reduce((best, cur, i, arr) =>
@@ -105,12 +64,6 @@ export function buildSummary(intent: string, evidenceAll: Evidence[], q: string)
   const start = Math.max(0, bestIdx - 2);
   const selected = paragraphs.slice(start, start + 12);
 
-  const title = intent ? `### ${intent} 관련 원문 발췌` : "### 규정 원문 발췌";
-
-  return [
-    title,
-    ...selected.map((x) => clampParagraph(x.display)),
-    tableMarkdown ? "\n### 관련 표\n" : "",
-    tableMarkdown ?? "",
-  ].join("\n\n");
+  const lead = intent ? `${intent} 관련 근거를 요약하면 다음과 같습니다.` : "근거를 요약하면 다음과 같습니다.";
+  return [lead, ...selected.slice(0, 8).map((x) => `- ${clampParagraph(x.display)}`)].join("\n");
 }

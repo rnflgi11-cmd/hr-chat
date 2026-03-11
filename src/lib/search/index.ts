@@ -7,6 +7,8 @@ import { buildSummary } from "./summarize";
 import { SearchAnswer, Evidence, Row } from "./types";
 import { getLlmRuntimeInfo, refineAnswerWithLlm } from "@/lib/llm";
 
+type QuestionType = "direct" | "list" | "explain";
+
 type QuestionContext = {
   cleanedQuestion: string;
   preferredDocHint?: string;
@@ -349,11 +351,10 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
   const out: Evidence[] = [];
   const seen = new Set<string>();
 
-  const tables = evs.filter((e) => e.block_type === "table_html");
-  const ps = evs.filter((e) => e.block_type === "p");
-
-  for (const e of ps) {
-    const key = (e.content_text ?? "").replace(/\s+/g, " ").trim();
+  for (const e of evs) {
+    const key = e.block_type === "table_html"
+      ? (e.content_html ?? "").replace(/\s+/g, " ").trim()
+      : (e.content_text ?? "").replace(/\s+/g, " ").trim();
     if (!key) continue;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -361,13 +362,46 @@ function dedupeAndPrioritizeEvidence(evs: Evidence[], max = 12): Evidence[] {
     if (out.length >= max) break;
   }
 
-  if (tables.length) {
-    const t = tables[0];
-    if (out.length < max) out.push(t);
-    else out[max - 1] = t;
-  }
+  return out;
+}
 
-  return out.slice(0, max);
+function detectQuestionType(question: string): QuestionType {
+  if (/(종류|목록|리스트|항목|무엇이|뭐가|알려줘)/.test(question)) return "list";
+  if (/(기준|조건|요건|절차|방법|왜|설명)/.test(question)) return "explain";
+  return "direct";
+}
+
+function toKeywords(question: string, topic: TopicProfile): string[] {
+  return Array.from(new Set([
+    ...tokenize(question),
+    ...tokenize(topic.queryTerms.join(" ")),
+  ])).filter((x) => x.length >= 2);
+}
+
+function filterEvidenceForQuestion(evidence: Evidence[], question: string, topic: TopicProfile): Evidence[] {
+  const include = topic.answerInclude ?? topic.include;
+  const exclude = topic.answerExclude ?? topic.exclude;
+  const keys = toKeywords(question, topic);
+
+  const scored = evidence.map((e) => {
+    const body = e.block_type === "table_html"
+      ? (e.content_html ?? "")
+      : (e.content_text ?? "");
+    let score = 0;
+    const plain = body.replace(/<[^>]+>/g, " ");
+    if (include?.test(plain)) score += 8;
+    if (exclude?.test(plain)) score -= 10;
+    for (const k of keys) if (plain.toLowerCase().includes(k.toLowerCase())) score += 2;
+    if (/문의|담당|연락처|참고|안내\s*문/.test(plain)) score -= 3;
+    return { e, score };
+  });
+
+  const filtered = scored
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.e);
+
+  return filtered.length ? filtered : evidence;
 }
 
 function lineScoreForQuestion(line: string, question: string): number {
@@ -462,7 +496,10 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const evidenceAll = toEvidence(doc.filename, ctx);
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
-  const draftedAnswer = buildTopicDraftAnswer(topic, question, normalizedEvidence) || buildSummary(intent, normalizedEvidence, question);
+  const questionType = detectQuestionType(question);
+  const selectedEvidence = filterEvidenceForQuestion(normalizedEvidence, question, topic);
+
+  const draftedAnswer = buildTopicDraftAnswer(topic, question, selectedEvidence);
 
 const llmRuntime = getLlmRuntimeInfo();
 
@@ -470,7 +507,8 @@ const llmResult = await refineAnswerWithLlm({
   question,
   draftAnswer: (draftedAnswer ?? "").trim(),
   intent,
-  evidence: normalizedEvidence,
+  questionType,
+  evidence: selectedEvidence,
 });
 
   const llmAnswer = llmResult?.answer ?? null;
@@ -484,17 +522,19 @@ const llmResult = await refineAnswerWithLlm({
 );
 
   const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
-  const normalized = normalizeAnswer(ensureTableFirstAnswer(topic.preferTable, rawAnswer, normalizedEvidence));
-  const detailedFallback = buildSummary(intent, normalizedEvidence, question);
-  const answer = enrichTooShortAnswer(normalized, detailedFallback, topic.preferTable, normalizedEvidence);
+  const normalized = normalizeAnswer(
+    questionType === "list" ? ensureTableFirstAnswer(topic.preferTable, rawAnswer, selectedEvidence) : rawAnswer
+  );
+  const detailedFallback = buildSummary(intent, selectedEvidence, question);
+  const answer = enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence);
 
-  const evidenceUi = dedupeAndPrioritizeEvidence(normalizedEvidence, 12);
+  const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 12);
 
   return {
     ok: true,
     answer,
     hits: evidenceUi,
-    llm_hits: normalizedEvidence.slice(0, 24),
+    llm_hits: selectedEvidence.slice(0, 24),
     meta: {
       intent,
       best_doc_id: bestDocId,
