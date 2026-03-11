@@ -3,10 +3,10 @@ import type { Evidence } from "@/lib/search/types";
 
 type LlmRefineInput = {
   question: string;
-  draftAnswer: string;
   intent: string;
-  evidence: Evidence[];
   questionType: "direct" | "list" | "explain";
+  evidence: Evidence[];
+  fallbackDraft?: string;
 };
 
 export type LlmRefineResult = {
@@ -132,7 +132,7 @@ async function resolveSupportedModel(apiKey: string, preferred: string): Promise
   return wanted;
 }
 
-function isBadModelOutput(out: string, draft: string): boolean {
+function isBadModelOutput(out: string): boolean {
   const text = cleanText(out);
   if (!text) return true;
 
@@ -140,7 +140,7 @@ function isBadModelOutput(out: string, draft: string): boolean {
     return true;
   }
 
-  if (text.length < 40 && draft.length > 220) return true;
+ if (text.length < 28) return true;
 
   const lines = text.split("\n").map((x) => x.trim()).filter(Boolean);
   const keys = lines.map((x) => x.toLowerCase().replace(/^[-*\d.)\s]+/, "").replace(/[\s:：·•()\[\]{}"'`]/g, ""));
@@ -175,10 +175,10 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
 
   const preferredModel = process.env.GEMINI_MODEL ?? "gemini-1.5-flash";
   const model = await resolveSupportedModel(apiKey, preferredModel);
-  const draft = cleanText(input.draftAnswer);
+  const fallbackDraft = cleanText(input.fallbackDraft);
   const evidence = buildEvidenceSnippet(input.evidence);
 
-  if (!draft && !evidence) return { answer: null, reason: "empty_input" };
+  if (!evidence) return { answer: null, reason: "empty_input" };
 
   const prompt = [
     HR_RULES_PROMPT,
@@ -186,9 +186,6 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     `질문: ${input.question}`,
     `의도: ${input.intent}`,
     `질문유형: ${input.questionType}`,
-    "",
-    "draft answer(참고용):",
-    draft || "(없음)",
     "",
     "evidence:",
     evidence || "(없음)",
@@ -255,14 +252,14 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
       .join("\n")
   );
 
-  if (isBadModelOutput(text, draft)) {
-    return { answer: draft || null, reason: "bad_output_fallback" };
+  if (isBadModelOutput(text)) {
+    return { answer: fallbackDraft || null, reason: "bad_output_fallback" };
   }
 
-  const answer = text || draft || null;
+  const answer = text || fallbackDraft || null;
   if (!answer) return { answer: null, reason: "empty_input" };
 
-  if (normalizeForCompare(answer) === normalizeForCompare(draft)) {
+  if (fallbackDraft && normalizeForCompare(answer) === normalizeForCompare(fallbackDraft)) {
     return { answer, reason: "same_as_draft" };
   }
 

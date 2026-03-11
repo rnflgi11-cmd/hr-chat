@@ -211,6 +211,14 @@ function enrichTooShortAnswer(answer: string, fallbackDetailed: string, preferTa
   return normalizeAnswer(ensureTableFirstAnswer(preferTable, detailed, evidence));
 }
 
+function shouldUseSummaryFallback(answer: string, llmApplied: boolean): boolean {
+  const compact = (answer ?? "").replace(/\s+/g, " ").trim();
+  if (!compact) return true;
+  if (compact.length < 24) return true;
+  if (!llmApplied && compact.length < 70) return true;
+  return false;
+}
+
 function normalizeLooseText(s: string): string {
   return s
     .toLowerCase()
@@ -392,7 +400,8 @@ function filterEvidenceForQuestion(evidence: Evidence[], question: string, topic
     if (include?.test(plain)) score += 8;
     if (exclude?.test(plain)) score -= 10;
     for (const k of keys) if (plain.toLowerCase().includes(k.toLowerCase())) score += 2;
-    if (/문의|담당|연락처|참고|안내\s*문/.test(plain)) score -= 3;
+    if (/문의|담당|연락처|참고|안내\s*문|본\s*규정/.test(plain)) score -= 3;
+    if (/(기타휴가|경조|안식년|프로젝트\s*수당)/.test(question) && !include?.test(plain)) score -= 2;
     return { e, score };
   });
 
@@ -402,6 +411,38 @@ function filterEvidenceForQuestion(evidence: Evidence[], question: string, topic
     .map((x) => x.e);
 
   return filtered.length ? filtered : evidence;
+}
+
+async function buildSupplementalEvidenceFromHits(
+  sb: Awaited<ReturnType<typeof retrieveCandidates>>["sb"],
+  hits: Row[],
+  scoreRow: (h: Row) => number,
+  maxDocs = 4,
+  maxBlocks = 48
+): Promise<Evidence[]> {
+  const scored = hits
+    .map((h) => ({ h, score: scoreRow(h) }))
+    .sort((a, b) => b.score - a.score);
+
+  const docIds = Array.from(new Set(scored.map((x) => x.h.document_id))).slice(0, maxDocs);
+  if (!docIds.length) return [];
+
+  const { data: docs } = await sb.from("documents").select("id, filename").in("id", docIds);
+  const nameById = new Map((docs ?? []).map((d) => [d.id, d.filename || "Unknown"]));
+
+  const selected = scored
+    .filter((x) => docIds.includes(x.h.document_id))
+    .slice(0, maxBlocks)
+    .map((x) => x.h)
+    .sort((a, b) => a.block_index - b.block_index);
+
+  return selected.map((h) => ({
+    filename: nameById.get(h.document_id) ?? "Unknown",
+    block_type: (h.kind ?? "").toLowerCase().includes("table") ? "table_html" : "p",
+    content_text: h.text,
+    content_html: h.table_html,
+    table_ok: Boolean(h.table_html),
+  }));
 }
 
 function lineScoreForQuestion(line: string, question: string): number {
@@ -493,22 +534,24 @@ export async function searchAnswer(q: string): Promise<SearchAnswer> {
   const doc = await loadDocFilename(sb, bestDocId);
   const ctx = await buildWindowContext({ sb, bestDocId, hits, scoreRow });
 
-  const evidenceAll = toEvidence(doc.filename, ctx);
+  const windowEvidence = toEvidence(doc.filename, ctx);
+  const supplementalEvidence = await buildSupplementalEvidenceFromHits(sb, hits, scoreRow, 4, 60);
+  const evidenceAll = [...windowEvidence, ...supplementalEvidence];
   const normalizedEvidence = evidenceAll.map((e) => ({ ...e, table_ok: e.table_ok ?? false }));
 
   const questionType = detectQuestionType(question);
   const selectedEvidence = filterEvidenceForQuestion(normalizedEvidence, question, topic);
 
-  const draftedAnswer = buildTopicDraftAnswer(topic, question, selectedEvidence);
+  const fallbackDraft = buildTopicDraftAnswer(topic, question, selectedEvidence) || buildSummary(intent, selectedEvidence, question);
 
 const llmRuntime = getLlmRuntimeInfo();
 
 const llmResult = await refineAnswerWithLlm({
   question,
-  draftAnswer: (draftedAnswer ?? "").trim(),
   intent,
   questionType,
   evidence: selectedEvidence,
+  fallbackDraft: fallbackDraft.trim(),
 });
 
   const llmAnswer = llmResult?.answer ?? null;
@@ -521,20 +564,22 @@ const llmResult = await refineAnswerWithLlm({
       llmRuntime.hasApiKey
 );
 
-  const rawAnswer = (llmAnswer ?? draftedAnswer ?? "").trim() || noResultFallback;
+  const rawAnswer = (llmAnswer ?? "").trim() || fallbackDraft || noResultFallback;
   const normalized = normalizeAnswer(
     questionType === "list" ? ensureTableFirstAnswer(topic.preferTable, rawAnswer, selectedEvidence) : rawAnswer
   );
   const detailedFallback = buildSummary(intent, selectedEvidence, question);
-  const answer = enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence);
+  const answer = shouldUseSummaryFallback(normalized, llmApplied)
+    ? enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
+    : normalized;
 
-  const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 12);
+  const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 16);
 
   return {
     ok: true,
     answer,
     hits: evidenceUi,
-    llm_hits: selectedEvidence.slice(0, 24),
+    llm_hits: selectedEvidence.slice(0, 40),
     meta: {
       intent,
       best_doc_id: bestDocId,
