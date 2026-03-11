@@ -64,6 +64,18 @@ function buildFallbackFromDraft(draft: string, questionType: LlmRefineInput["que
   return [lead, ...bullets, ...table].join("\n\n").trim();
 }
 
+function stripMarkdownTables(text: string): string {
+  return text
+    .split("\n")
+    .filter((x) => {
+      const t = x.trim();
+      return !(t && (/^\|.*\|$/.test(t) || /^[:\-\s|]+$/.test(t)));
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function cleanText(s: string | null | undefined): string {
   return (s ?? "")
     .replace(/\r/g, "")
@@ -226,15 +238,20 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     `의도: ${input.intent}`,
     `질문유형: ${input.questionType}`,
     "",
+    "fallback draft(구조 보존 대상):",
+    fallbackDraft || "(없음)",
+    "",
     "evidence:",
     evidence || "(없음)",
     "",
     "출력 지시:",
-    "1) 최종 답변 Markdown 본문만 출력",
+    "1) 최종 답변 Markdown 본문만 출력(문장 다듬기 중심)",
+    "1-1) fallback draft의 정보 구조/순서를 최대한 유지",
     "2) direct 유형: 첫 문장에서 결론을 말하고, 이어서 2~4문장으로 자연스럽게 설명",
     "3) list 유형: 짧은 서문 1문장 후, 필요한 경우에만 목록 또는 표를 사용",
     "4) explain 유형: 결론 1문장 + 핵심 기준 2~5개(짧은 bullet 또는 문단)",
-    "5) 표를 쓴 경우: 표 앞 1문장 + 표 뒤 핵심 설명 2~4개를 반드시 포함",
+    "5) 표를 새로 만들거나 수정하지 말 것(표는 시스템이 별도 보존함)",
+    "5-1) 표가 필요한 경우 표 앞 결론 1문장과 표 뒤 해설 2~4개 문장만 다듬을 것",
     "6) 질문과 직접 관련 없는 항목/제도는 제외",
     "7) 출처 표기는 선택 사항이며, 강제로 넣지 않아도 됨",
     "8) 문장을 중간에 끊지 말고 완결형으로 끝낼 것",
@@ -292,11 +309,13 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
       .join("\n")
   );
 
-  if (isBadModelOutput(text) || isLikelyTruncatedOutput(text) || isTooShortForType(text, input.questionType)) {
+  const proseOnly = stripMarkdownTables(text);
+
+  if (isBadModelOutput(proseOnly) || isLikelyTruncatedOutput(proseOnly) || isTooShortForType(proseOnly, input.questionType)) {
     return { answer: fallbackDetailed || fallbackDraft || null, reason: "bad_output_fallback" };
   }
 
-  const answer = text || fallbackDetailed || fallbackDraft || null;
+  const answer = proseOnly || fallbackDetailed || fallbackDraft || null;
   if (!answer) return { answer: null, reason: "empty_input" };
 
   if (fallbackDraft && normalizeForCompare(answer) === normalizeForCompare(fallbackDraft)) {

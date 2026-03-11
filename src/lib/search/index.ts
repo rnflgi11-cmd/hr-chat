@@ -220,13 +220,6 @@ function shouldUseSummaryFallback(answer: string, llmApplied: boolean): boolean 
   return false;
 }
 
-function hasOnlyTable(answer: string): boolean {
-  const lines = (answer ?? "").split("\n").map((x) => x.trim()).filter(Boolean);
-  if (!lines.length) return true;
-  const nonTable = lines.filter((x) => !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x));
-  return nonTable.length <= 1;
-}
-
 function normalizeLooseText(s: string): string {
   return s
     .toLowerCase()
@@ -291,8 +284,63 @@ function ensureTableFirstAnswer(preferTable: boolean, answer: string, evidence: 
 
   const cleanedAnswer = removeTableEchoLines(removeRepeatedListBelowTable(answer), mdTable);
   return ["### 기준표", mdTable, cleanedAnswer].filter(Boolean).join("\n\n");
+  return [mdTable, cleanedAnswer].filter(Boolean).join("\n\n");
 }
 
+function extractProseLines(answer: string): string[] {
+  return (answer ?? "")
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => !/^\|.*\|$/.test(x) && !/^[:\-\s|]+$/.test(x))
+    .filter((x) => !/^출처\s*:/.test(x));
+}
+
+function pickPreferredTableMarkdown(evidence: Evidence[]): string {
+  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
+  if (!table) return "";
+  return htmlTableToMarkdown(table.content_html ?? "");
+}
+
+function composeFinalAnswer({
+  questionType,
+  llmAnswer,
+  fallbackDraft,
+  detailedFallback,
+  tableMarkdown,
+}: {
+  questionType: QuestionType;
+  llmAnswer: string;
+  fallbackDraft: string;
+  detailedFallback: string;
+  tableMarkdown: string;
+}): string {
+  const prose = extractProseLines(llmAnswer || fallbackDraft);
+  const supplemental = extractProseLines(detailedFallback);
+  const merged = Array.from(new Set([...prose, ...supplemental])).slice(0, 6);
+  const conclusion = merged[0] ?? "질문하신 내용은 사내 규정 기준으로 확인됩니다.";
+  const details = merged.slice(1);
+
+  if (questionType === "list" && tableMarkdown) {
+    return normalizeAnswer([
+      conclusion,
+      tableMarkdown,
+      ...details.slice(0, 4).map((x) => `- ${x.replace(/^[-*]\s*/, "")}`),
+    ].join("\n\n"));
+  }
+
+  if (questionType === "explain") {
+    return normalizeAnswer([
+      conclusion,
+      ...details.slice(0, 4).map((x) => `- ${x.replace(/^[-*]\s*/, "")}`),
+    ].join("\n"));
+  }
+
+  return normalizeAnswer([
+    conclusion,
+    ...details.slice(0, 3),
+  ].join("\n\n"));
+}
 function applyLeaveDaysSafetyFilter(question: string, hits: Row[]): Row[] {
   if (!/(며칠|몇\s*일|일수|기간)/.test(question)) return hits;
   if (!/(경조|경조\s*휴가|휴가)/.test(question)) return hits;
@@ -466,8 +514,7 @@ function lineScoreForQuestion(line: string, question: string): number {
 }
 
 function buildTopicDraftAnswer(topic: TopicProfile, questionType: QuestionType, question: string, evidence: Evidence[]): string {
-  const table = evidence.find((e) => e.block_type === "table_html" && (e.content_html ?? "").trim());
-  const mdTable = table ? htmlTableToMarkdown(table.content_html ?? "") : "";
+  const mdTable = pickPreferredTableMarkdown(evidence);
 
   const include = topic.answerInclude ?? topic.include ?? /./;
   const exclude = topic.answerExclude ?? topic.exclude;
@@ -504,9 +551,9 @@ function buildTopicDraftAnswer(topic: TopicProfile, questionType: QuestionType, 
     ].join("\n").trim();
   }
 
-  const lead = `${topic.intent} 관련 핵심 항목은 다음과 같습니다.`;
+  const lead = `${topic.intent} 관련 핵심 항목을 먼저 정리해 드립니다.`;
   const support = details.slice(0, 4).map((line) => `- ${line}`).join("\n");
-  const tableIntro = mdTable ? "아래 표는 질문과 직접 관련된 항목만 정리한 것입니다." : "";
+  const tableIntro = mdTable ? "아래 표는 질문과 직접 관련된 기준만 정리한 내용입니다." : "";
   const afterTable = details.slice(0, 3).map((line) => `- ${line}`).join("\n");
 
   return [lead, support, mdTable ? `${tableIntro}\n${mdTable}` : "", mdTable ? afterTable : ""]
@@ -586,16 +633,18 @@ const llmResult = await refineAnswerWithLlm({
 );
 
   const rawAnswer = (llmAnswer ?? "").trim() || fallbackDraft || noResultFallback;
-  const normalized0 = normalizeAnswer(
-    questionType === "list" ? ensureTableFirstAnswer(topic.preferTable, rawAnswer, selectedEvidence) : rawAnswer
-  );
-  const normalized = hasOnlyTable(normalized0)
-    ? normalizeAnswer([buildSummary(intent, selectedEvidence, question, questionType), normalized0].filter(Boolean).join("\n\n"))
-    : normalized0;
   const detailedFallback = buildSummary(intent, selectedEvidence, question, questionType);
-  const answer = shouldUseSummaryFallback(normalized, llmApplied)
-    ? enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
-    : normalized;
+  const tableMarkdown = pickPreferredTableMarkdown(selectedEvidence);
+  const composed = composeFinalAnswer({
+    questionType,
+    llmAnswer: rawAnswer,
+    fallbackDraft,
+    detailedFallback,
+    tableMarkdown,
+  });
+  const answer = shouldUseSummaryFallback(composed, llmApplied)
+    ? enrichTooShortAnswer(composed, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
+    : composed;
 
   const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 16);
 
