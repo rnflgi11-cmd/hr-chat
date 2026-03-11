@@ -37,6 +37,7 @@ const HR_RULES_PROMPT = [
   "첫 문장에서 질문의 결론을 바로 말하세요.",
   "제목(예: ### 안내), 담당자 문의 문구, 같은 의미 반복 문장을 넣지 마세요.",
   "표는 질문이 목록/기준 비교를 요구할 때만 사용하고, 관련 행만 최소로 제시하세요.",
+  "표를 사용하는 경우에도 표만 단독으로 내지 말고, 표 앞에 짧은 설명 1문장을 먼저 쓰세요.",
   `근거가 부족하면 정확히 아래 문구만 출력: ${STRICT_FALLBACK}`,
 ].join("\n");
 
@@ -192,11 +193,11 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
     "",
     "출력 지시:",
     "1) 최종 답변 Markdown 본문만 출력",
-    "2) direct 유형: 첫 문장 결론 + 핵심 bullet 1~4개",
-    "3) list 유형: 첫 문장 결론 + bullet 목록(또는 필요한 경우에만 표)",
-    "4) explain 유형: 첫 문장 결론 + 근거 bullet 2~6개",
+    "2) direct 유형: 첫 문장에서 결론을 말하고, 이어서 2~4문장으로 자연스럽게 설명",
+    "3) list 유형: 짧은 서문 1문장 후, 필요한 경우에만 목록 또는 표를 사용",
+    "4) explain 유형: 결론 1문장 + 핵심 기준 2~5개(짧은 bullet 또는 문단)",
     "5) 질문과 직접 관련 없는 항목/제도는 제외",
-    "6) 마지막 줄에 '출처: 파일명' 형식으로 1~3개 표기",
+    "6) 출처 표기는 선택 사항이며, 강제로 넣지 않아도 됨",
     "7) 문장을 중간에 끊지 말고 완결형으로 끝낼 것",
   ].join("\n");
 
@@ -205,8 +206,8 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
   const payload = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
-      temperature: 0,
-      topP: 0.1,
+      temperature: 0.28,
+      topP: 0.85,
       maxOutputTokens: 1024,
     },
   };
@@ -252,7 +253,7 @@ export async function refineAnswerWithLlm(input: LlmRefineInput): Promise<LlmRef
       .join("\n")
   );
 
-  if (isBadModelOutput(text)) {
+  if (isBadModelOutput(text) || isLikelyTruncatedOutput(text)) {
     return { answer: fallbackDraft || null, reason: "bad_output_fallback" };
   }
 

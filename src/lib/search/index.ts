@@ -214,8 +214,8 @@ function enrichTooShortAnswer(answer: string, fallbackDetailed: string, preferTa
 function shouldUseSummaryFallback(answer: string, llmApplied: boolean): boolean {
   const compact = (answer ?? "").replace(/\s+/g, " ").trim();
   if (!compact) return true;
-  if (compact.length < 24) return true;
-  if (!llmApplied && compact.length < 70) return true;
+  if (compact.length < 20) return true;
+  if (!llmApplied && compact.length < 48) return true;
   return false;
 }
 
@@ -478,17 +478,10 @@ function buildTopicDraftAnswer(topic: TopicProfile, question: string, evidence: 
     .slice(0, topic.maxBullets)
     .map((x) => x.line);
 
-  const bullets = lines.map((line) => `- ${line}`).join("\n");
-  const summaryTitle = topic.intent ? `### ${topic.intent} 안내` : "### 인사 규정 안내";
-  const summaryLine = `${topic.intent} 관련 핵심 기준을 정리해 드립니다.`;
+  const lead = lines[0] ? `${lines[0]}` : `${topic.intent} 기준은 사내 규정 근거로 확인됩니다.`;
+  const support = lines.slice(1, 4).map((line) => `- ${line}`).join("\n");
 
-  return [
-    summaryTitle,
-    summaryLine,
-    bullets,
-    mdTable ? "\n### 관련 표\n" : "",
-    mdTable,
-  ]
+  return [lead, support, mdTable ? `참고 가능한 기준표입니다.\n${mdTable}` : ""]
     .filter(Boolean)
     .join("\n\n")
     .trim();
@@ -570,7 +563,9 @@ const llmResult = await refineAnswerWithLlm({
   );
   const detailedFallback = buildSummary(intent, selectedEvidence, question);
   const answer = shouldUseSummaryFallback(normalized, llmApplied)
-    ? enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence)
+    ? (llmApplied
+      ? normalized
+      : enrichTooShortAnswer(normalized, detailedFallback, questionType === "list" && topic.preferTable, selectedEvidence))
     : normalized;
 
   const evidenceUi = dedupeAndPrioritizeEvidence(selectedEvidence, 16);
